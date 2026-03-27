@@ -299,6 +299,23 @@ class BatchTableWidget(QTableWidget):
         self.setRowCount(0)
         self.add_row()
 
+    def apply_current_cell_to_selected_rows(self) -> tuple[bool, str]:
+        current_item = self.currentItem()
+        if current_item is None:
+            return False, "请先把光标放到要复用的单元格里。"
+        selected = self.selected_row_indices()
+        if len(selected) <= 1:
+            return False, "请至少选中两行，才能把当前值套用到其它行。"
+        current_row = current_item.row()
+        current_column = current_item.column()
+        column = self.columns[current_column]
+        value = self._cell_value(current_row, current_column, column)
+        for row_index in selected:
+            if row_index == current_row:
+                continue
+            self.setItem(row_index, current_column, self._item_for_value(column, value))
+        return True, f"已将“{column.title}”列的当前值套用到 {len(selected) - 1} 行。"
+
     def _row_to_mapping(self, row_index: int) -> dict[str, Any]:
         row_data: dict[str, Any] = {}
         for column_index, column in enumerate(self.columns):
@@ -488,6 +505,7 @@ class BatchPage(QWidget):
             ("新增行", self._add_row),
             ("载入示例", self._load_example_rows),
             ("复制上一行", self._copy_previous_row),
+            ("套用当前值", self._apply_current_value),
             ("启用选中", self._enable_selected_rows),
             ("停用选中", self._disable_selected_rows),
             ("删除选中", self._remove_rows),
@@ -513,7 +531,7 @@ class BatchPage(QWidget):
             button = QPushButton(text)
             if text in {"删除选中", "停止", "保存模板", "加载模板", "清空表格"}:
                 button.setProperty("variant", "secondary")
-            if text in {"载入示例", "导入", "导出当前", "导出模板", "复制上一行"}:
+            if text in {"载入示例", "导入", "导出当前", "导出模板", "复制上一行", "套用当前值"}:
                 button.setProperty("variant", "ghost")
             toolbar.addWidget(button)
             self._buttons[text] = button
@@ -643,6 +661,13 @@ class BatchPage(QWidget):
             return
         self._update_summary("已把上一行内容复制到选中行。")
 
+    def _apply_current_value(self) -> None:
+        applied, message = self.table.apply_current_cell_to_selected_rows()
+        if not applied:
+            QMessageBox.information(self, "套用当前值", message)
+            return
+        self._update_summary(message)
+
     def _clear_table(self) -> None:
         answer = QMessageBox.question(
             self,
@@ -765,6 +790,10 @@ class HistoryPage(QWidget):
         self.summary_label.setProperty("role", "muted")
         self.summary_label.setWordWrap(True)
         history_card.body_layout.addWidget(self.summary_label)
+        self.failure_summary_label = QLabel("选中一条执行记录后，这里会展示失败原因摘要。")
+        self.failure_summary_label.setProperty("role", "hint")
+        self.failure_summary_label.setWordWrap(True)
+        history_card.body_layout.addWidget(self.failure_summary_label)
 
         self.execution_table = QTableWidget(0, 7)
         self.execution_table.setHorizontalHeaderLabels(

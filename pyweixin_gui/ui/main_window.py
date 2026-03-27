@@ -257,6 +257,7 @@ class MainWindow(QMainWindow):
         table.resizeColumnsToContents()
         self.history_page.detail_table.setRowCount(0)
         self.history_page.diagnostic_text.clear()
+        self.history_page.failure_summary_label.setText("选中一条执行记录后，这里会展示失败原因摘要。")
         success_runs = sum(1 for execution in executions if execution.failure_count == 0 and execution.status == "completed")
         failed_runs = sum(1 for execution in executions if execution.failure_count > 0)
         self.history_page.total_runs_label.value_label.setText(str(len(executions)))  # type: ignore[attr-defined]
@@ -500,6 +501,20 @@ class MainWindow(QMainWindow):
                 table.setItem(row_index, column_index, item)
         table.resizeColumnsToContents()
         self.history_page.diagnostic_text.clear()
+        failure_counts: dict[str, int] = {}
+        for row in execution.rows:
+            if row.success:
+                continue
+            key = row.error_code or row.error_message or "未知原因"
+            failure_counts[key] = failure_counts.get(key, 0) + 1
+        if failure_counts:
+            ordered = sorted(failure_counts.items(), key=lambda item: (-item[1], item[0]))
+            text = "失败原因摘要：" + "；".join(f"{reason} x{count}" for reason, count in ordered[:4])
+            if len(ordered) > 4:
+                text += "；..."
+            self.history_page.failure_summary_label.setText(text)
+        else:
+            self.history_page.failure_summary_label.setText("这次执行没有失败项，全部处理成功。")
 
     def show_selected_row_diagnostic(self) -> None:
         execution_id = self._selected_execution_id()
