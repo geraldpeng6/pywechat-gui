@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+import csv
+from pathlib import Path
+from typing import Any
+
+from .models import FileBatchRow, MessageBatchRow, TaskType
+
+try:
+    from openpyxl import Workbook, load_workbook
+except ImportError:  # pragma: no cover - optional dependency in non-GUI envs
+    Workbook = None
+    load_workbook = None
+
+
+MESSAGE_HEADERS = [
+    "enabled",
+    "session_name",
+    "message",
+    "at_members",
+    "at_all",
+    "clear_before_send",
+    "send_delay_sec",
+    "remark",
+]
+
+FILE_HEADERS = [
+    "enabled",
+    "session_name",
+    "file_paths",
+    "with_message",
+    "message",
+    "message_first",
+    "remark",
+]
+
+
+def headers_for(task_type: TaskType) -> list[str]:
+    return MESSAGE_HEADERS if task_type is TaskType.MESSAGE else FILE_HEADERS
+
+
+def _load_csv_rows(path: Path) -> list[dict[str, Any]]:
+    raw = path.read_bytes()
+    for encoding in ("utf-8-sig", "gbk"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise UnicodeDecodeError("csv", raw, 0, 1, "无法识别 CSV 编码")
+    reader = csv.DictReader(text.splitlines())
+    return [dict(row) for row in reader]
+
+
+def _load_xlsx_rows(path: Path) -> list[dict[str, Any]]:
+    if load_workbook is None:
+        raise RuntimeError("未安装 openpyxl，无法导入 .xlsx 文件")
+    workbook = load_workbook(path)
+    sheet = workbook.active
+    rows = list(sheet.iter_rows(values_only=True))
+    if not rows:
+        return []
+    header = [str(value).strip() if value is not None else "" for value in rows[0]]
+    items: list[dict[str, Any]] = []
+    for row in rows[1:]:
+        items.append({header[index]: row[index] for index in range(len(header))})
+    return items
+
+
+def load_rows(task_type: TaskType, path: str | Path) -> list[MessageBatchRow] | list[FileBatchRow]:
+    file_path = Path(path)
+    if file_path.suffix.lower() == ".csv":
+        rows = _load_csv_rows(file_path)
+    elif file_path.suffix.lower() == ".xlsx":
+        rows = _load_xlsx_rows(file_path)
+    else:
+        raise ValueError("仅支持导入 .csv 或 .xlsx 文件")
+    if task_type is TaskType.MESSAGE:
+        return [MessageBatchRow.from_mapping(row) for row in rows]
+    return [FileBatchRow.from_mapping(row) for row in rows]
+
+
+def dump_rows(task_type: TaskType, rows: list[dict[str, Any]], path: str | Path) -> None:
+    file_path = Path(path)
+    header = headers_for(task_type)
+    if file_path.suffix.lower() == ".csv":
+        with file_path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=header)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({key: row.get(key, "") for key in header})
+        return
+    if file_path.suffix.lower() == ".xlsx":
+        if Workbook is None:
+            raise RuntimeError("未安装 openpyxl，无法导出 .xlsx 文件")
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(header)
+        for row in rows:
+            sheet.append([row.get(key, "") for key in header])
+        workbook.save(file_path)
+        return
+    raise ValueError("仅支持导出 .csv 或 .xlsx 文件")
