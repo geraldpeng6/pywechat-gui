@@ -27,6 +27,41 @@ git clone https://github.com/Hello-Mr-Crab/pywechat.git
 ```
 <br>
 
+### Windows GUI 工作台（批量消息/批量文件）
+适用于 `pyweixin(微信 4.1+)` 的 Windows 桌面 GUI 已包含在仓库中，默认提供：
+- 环境自检与连接测试
+- 批量消息表格编辑、Excel/CSV 导入导出
+- 批量文件发送与文件选择器
+- 模板中心、执行历史、失败项重试
+- GUI 设置页与运行日志
+
+安装 GUI 依赖：
+```
+pip install .[gui]
+```
+
+源码启动：
+```
+python -m pyweixin_gui
+```
+
+控制台入口：
+```
+pywechat-gui
+```
+
+Windows onedir 打包：
+```
+pip install .[dev-gui]
+pyinstaller pyweixin_gui.spec
+```
+
+说明：
+- GUI 只面向 `pyweixin`，不兼容旧版 `pywechat`
+- 建议在 Windows 10/11 上使用
+- 若微信主界面无法识别，请参考 `Weixin4.0.md` 中的讲述人/无障碍说明
+<br>
+
 ### 获取方法（3.9+微信）:
 #### 最新版本:1.9.7
 ```
