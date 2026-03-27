@@ -186,8 +186,21 @@ class MainWindow(QMainWindow):
                 template.updated_at or "",
             ]
             for column_index, value in enumerate(values):
-                table.setItem(row_index, column_index, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                if column_index == 2:
+                    if template.task_type is TaskType.MESSAGE:
+                        item.setBackground(QColor("#dbeafe"))
+                    else:
+                        item.setBackground(QColor("#fef3c7"))
+                table.setItem(row_index, column_index, item)
         table.resizeColumnsToContents()
+        self.templates_page.total_templates_label.value_label.setText(str(len(templates)))  # type: ignore[attr-defined]
+        self.templates_page.message_templates_label.value_label.setText(
+            str(sum(1 for item in templates if item.task_type is TaskType.MESSAGE))
+        )  # type: ignore[attr-defined]
+        self.templates_page.file_templates_label.value_label.setText(
+            str(sum(1 for item in templates if item.task_type is TaskType.FILE))
+        )  # type: ignore[attr-defined]
         if filtered:
             self.templates_page.summary_label.setText(
                 f"当前显示 {len(filtered)} / {len(templates)} 个模板。双击或选中后可加载到工作台。"
@@ -381,6 +394,17 @@ class MainWindow(QMainWindow):
                 suggestion="\n".join(environment.advice) if environment.advice else "请先解决首页提示的问题，再回来执行。",
             )
             return
+        enabled_rows = [row for row in rows if row.enabled]
+        if len(enabled_rows) >= 20 and source_execution_id is None:
+            answer = QMessageBox.question(
+                self,
+                "确认执行大批量任务",
+                f"当前准备执行 {len(enabled_rows)} 行任务。\n\n"
+                "建议先确认会话名称和消息内容无误，再继续执行。\n"
+                "是否现在开始？",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         runtime_options = self.settings.runtime_options()
         self.worker_thread = QThread(self)
         self.worker = BatchWorker(self.executor, task_type, rows, runtime_options, source_execution_id)

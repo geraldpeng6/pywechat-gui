@@ -215,6 +215,15 @@ class BatchTableWidget(QTableWidget):
                 message = errors.get(row_index, {}).get(column.key, "")
                 item.setToolTip(message)
 
+    def focus_first_error(self, errors: dict[int, dict[str, str]]) -> None:
+        if not errors:
+            return
+        first_row = min(errors.keys())
+        first_column_key = next(iter(errors[first_row].keys()))
+        first_column = self._column_index(first_column_key)
+        self.setCurrentCell(first_row, first_column)
+        self.scrollToItem(self.item(first_row, first_column))
+
     def _item_for_value(self, column: ColumnSpec, value: Any) -> QTableWidgetItem:
         item = QTableWidgetItem()
         if column.kind == "bool":
@@ -466,6 +475,14 @@ class BatchPage(QWidget):
         helper.setProperty("role", "hint")
         helper.setWordWrap(True)
         card.body_layout.addWidget(helper)
+        required_hint = QLabel(
+            "必填列：会话名称、消息内容。群聊 @ 成员请用 | 分隔。"
+            if task_type is TaskType.MESSAGE
+            else "必填列：会话名称、文件路径。多个文件用 | 分隔；附带消息时还需要填写消息内容。"
+        )
+        required_hint.setProperty("role", "warn")
+        required_hint.setWordWrap(True)
+        card.body_layout.addWidget(required_hint)
         toolbar = QHBoxLayout()
         button_specs = [
             ("新增行", self._add_row),
@@ -538,6 +555,7 @@ class BatchPage(QWidget):
                 all_errors[row_index] = errors
         self.table.highlight_errors(all_errors)
         if all_errors:
+            self.table.focus_first_error(all_errors)
             self._update_summary(f"表格中将执行 {enabled_rows} 行，其中有 {len(all_errors)} 行需要先修复。")
         else:
             self._update_summary(f"校验通过。表格共 {len(rows)} 行，实际会执行 {enabled_rows} 行。")
@@ -675,6 +693,13 @@ class TemplatesPage(QWidget):
         helper.setProperty("role", "hint")
         helper.setWordWrap(True)
         card.body_layout.addWidget(helper)
+        stats_layout = QHBoxLayout()
+        self.total_templates_label = self._create_stat_card("模板总数", "0")
+        self.message_templates_label = self._create_stat_card("消息模板", "0")
+        self.file_templates_label = self._create_stat_card("文件模板", "0")
+        for stat_card in [self.total_templates_label, self.message_templates_label, self.file_templates_label]:
+            stats_layout.addWidget(stat_card)
+        card.body_layout.addLayout(stats_layout)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索模板名称或类型，例如：消息、客户、通知")
         card.body_layout.addWidget(self.search_input)
@@ -690,6 +715,18 @@ class TemplatesPage(QWidget):
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         card.body_layout.addWidget(self.table)
         layout.addWidget(card)
+
+    @staticmethod
+    def _create_stat_card(title: str, value: str) -> QWidget:
+        card = CardFrame()
+        title_label = QLabel(title)
+        title_label.setProperty("role", "statTitle")
+        value_label = QLabel(value)
+        value_label.setProperty("role", "statValue")
+        card.body_layout.addWidget(title_label)
+        card.body_layout.addWidget(value_label)
+        card.value_label = value_label  # type: ignore[attr-defined]
+        return card
 
 
 class HistoryPage(QWidget):
