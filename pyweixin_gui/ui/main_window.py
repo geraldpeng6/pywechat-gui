@@ -629,9 +629,14 @@ class MainWindow(QMainWindow):
 
     def _update_history_action_state(self) -> None:
         selected_execution = self._selected_execution_id()
-        has_selection = selected_execution is not None
-        self.history_page.export_failed_button.setEnabled(has_selection)
-        self.history_page.retry_button.setEnabled(has_selection)
+        if selected_execution is None:
+            self.history_page.export_failed_button.setEnabled(False)
+            self.history_page.retry_button.setEnabled(False)
+            return
+        execution = self.storage.get_execution(selected_execution)
+        has_failures = execution.failure_count > 0
+        self.history_page.export_failed_button.setEnabled(has_failures)
+        self.history_page.retry_button.setEnabled(has_failures)
 
     def _show_guidance_dialog(self, title: str, message: str, suggestion: str) -> None:
         dialog = QDialog(self)
