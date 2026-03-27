@@ -273,6 +273,9 @@ def example_rows_for(task_type: TaskType) -> list[MessageBatchRow] | list[FileBa
 
 class DashboardPage(QWidget):
     refresh_requested = Signal()
+    open_message_requested = Signal()
+    open_file_requested = Signal()
+    open_templates_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -291,6 +294,20 @@ class DashboardPage(QWidget):
         self.hero_hint.setProperty("role", "good")
         self.hero_hint.setWordWrap(True)
         self.hero_card.body_layout.addWidget(self.hero_hint)
+        quick_actions = QHBoxLayout()
+        self.open_message_button = QPushButton("去批量消息")
+        self.open_file_button = QPushButton("去批量文件")
+        self.open_templates_button = QPushButton("查看模板")
+        self.open_file_button.setProperty("variant", "secondary")
+        self.open_templates_button.setProperty("variant", "ghost")
+        quick_actions.addWidget(self.open_message_button)
+        quick_actions.addWidget(self.open_file_button)
+        quick_actions.addWidget(self.open_templates_button)
+        quick_actions.addStretch(1)
+        self.hero_card.body_layout.addLayout(quick_actions)
+        self.open_message_button.clicked.connect(lambda: self.open_message_requested.emit())
+        self.open_file_button.clicked.connect(lambda: self.open_file_requested.emit())
+        self.open_templates_button.clicked.connect(lambda: self.open_templates_requested.emit())
         layout.addWidget(self.hero_card)
 
         self.env_card = CardFrame("环境自检")
@@ -369,6 +386,7 @@ class BatchPage(QWidget):
         super().__init__(parent)
         self.task_type = task_type
         self.pending_source_execution_id: int | None = None
+        self._buttons: dict[str, QPushButton] = {}
         layout = QVBoxLayout(self)
         card = CardFrame(title, hero=True)
         subtitle = QLabel(
@@ -412,6 +430,7 @@ class BatchPage(QWidget):
             if text in {"载入示例", "导入", "导出当前", "导出模板"}:
                 button.setProperty("variant", "ghost")
             toolbar.addWidget(button)
+            self._buttons[text] = button
             button.clicked.connect(lambda _checked=False, cb=callback: cb())
         toolbar.addStretch(1)
         card.body_layout.addLayout(toolbar)
@@ -423,6 +442,7 @@ class BatchPage(QWidget):
         card.body_layout.addWidget(self.summary_label)
         layout.addWidget(card)
         self.table.load_rows([])
+        self.set_running_state(False)
 
     def rows(self) -> list[MessageBatchRow] | list[FileBatchRow]:
         mappings = self.table.rows_as_dicts()
@@ -462,7 +482,13 @@ class BatchPage(QWidget):
             self._update_summary("当前没有启用的任务行，请先勾选需要执行的内容。")
             return
         if errors:
-            QMessageBox.warning(self, "校验失败", "请先修复表格中的高亮字段。")
+            line_numbers = [str(index + 1) for index in sorted(errors.keys())[:5]]
+            extra = " 等" if len(errors) > 5 else ""
+            QMessageBox.warning(
+                self,
+                "校验失败",
+                f"请先修复表格中的高亮字段。\n出错行：第 {', '.join(line_numbers)} 行{extra}",
+            )
             return
         self.run_requested.emit(rows, self.pending_source_execution_id)
         self.pending_source_execution_id = None
@@ -518,6 +544,16 @@ class BatchPage(QWidget):
     def _update_summary(self, text: str) -> None:
         self.summary_label.setText(text)
 
+    def set_running_state(self, is_running: bool) -> None:
+        for name, button in self._buttons.items():
+            if name == "停止":
+                button.setEnabled(is_running)
+            elif name == "执行":
+                button.setEnabled(not is_running)
+            else:
+                button.setEnabled(not is_running)
+        self.table.setDisabled(is_running)
+
 
 class TemplatesPage(QWidget):
     load_template_requested = Signal(object, object)
@@ -552,6 +588,7 @@ class TemplatesPage(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         card.body_layout.addWidget(self.table)
         layout.addWidget(card)
 
@@ -590,6 +627,7 @@ class HistoryPage(QWidget):
         self.execution_table.verticalHeader().setVisible(False)
         self.execution_table.horizontalHeader().setStretchLastSection(True)
         self.execution_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.execution_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         history_card.body_layout.addWidget(self.execution_table)
 
         detail_group = QGroupBox("逐行结果")

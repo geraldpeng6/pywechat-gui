@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
         self.refresh_templates()
         self.refresh_history()
         self._show_welcome_if_needed()
+        self._set_running_state(False)
 
     def _add_page(self, title: str, page: QWidget) -> None:
         self.nav.addItem(QListWidgetItem(title))
@@ -122,6 +123,9 @@ class MainWindow(QMainWindow):
 
     def _bind_events(self) -> None:
         self.dashboard_page.refresh_requested.connect(self.refresh_environment)
+        self.dashboard_page.open_message_requested.connect(lambda: self.nav.setCurrentRow(1))
+        self.dashboard_page.open_file_requested.connect(lambda: self.nav.setCurrentRow(2))
+        self.dashboard_page.open_templates_requested.connect(lambda: self.nav.setCurrentRow(3))
         self.message_page.run_requested.connect(lambda rows, src: self.start_batch(TaskType.MESSAGE, rows, src))
         self.file_page.run_requested.connect(lambda rows, src: self.start_batch(TaskType.FILE, rows, src))
         self.message_page.stop_requested.connect(self.stop_batch)
@@ -136,6 +140,7 @@ class MainWindow(QMainWindow):
         self.templates_page.delete_button.clicked.connect(self.delete_selected_template)
         self.templates_page.rename_button.clicked.connect(self.rename_selected_template)
         self.templates_page.duplicate_button.clicked.connect(self.duplicate_selected_template)
+        self.templates_page.table.itemDoubleClicked.connect(lambda _item: self.load_selected_template())
 
         self.history_page.refresh_button.clicked.connect(self.refresh_history)
         self.history_page.clear_button.clicked.connect(self.clear_history)
@@ -327,10 +332,13 @@ class MainWindow(QMainWindow):
         self.worker.finished.connect(self._handle_finished)
         self.worker.failed.connect(self._handle_worker_failure)
         self.worker.finished.connect(self.worker_thread.quit)
+        self.worker.failed.connect(self.worker_thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.failed.connect(self.worker.deleteLater)
         self.worker_thread.finished.connect(self.worker_thread.deleteLater)
         self.worker_thread.finished.connect(self._cleanup_worker)
         self.worker_thread.start()
+        self._set_running_state(True)
         self.status_bar.showMessage("任务已开始执行。执行期间请不要手动操作微信。", 5000)
 
     def stop_batch(self) -> None:
@@ -376,6 +384,7 @@ class MainWindow(QMainWindow):
     def _cleanup_worker(self) -> None:
         self.worker = None
         self.worker_thread = None
+        self._set_running_state(False)
 
     def _selected_execution_id(self) -> int | None:
         table = self.history_page.execution_table
@@ -461,6 +470,22 @@ class MainWindow(QMainWindow):
         self.storage.clear_history()
         self.refresh_history()
         self.status_bar.showMessage("历史记录已清理", 4000)
+
+    def _set_running_state(self, is_running: bool) -> None:
+        self.message_page.set_running_state(is_running)
+        self.file_page.set_running_state(is_running)
+        for button in [
+            self.templates_page.refresh_button,
+            self.templates_page.rename_button,
+            self.templates_page.duplicate_button,
+            self.templates_page.delete_button,
+            self.templates_page.load_button,
+            self.history_page.refresh_button,
+            self.history_page.retry_button,
+            self.history_page.clear_button,
+            self.settings_page.save_button,
+        ]:
+            button.setEnabled(not is_running)
 
     def _show_guidance_dialog(self, title: str, message: str, suggestion: str) -> None:
         dialog = QDialog(self)
