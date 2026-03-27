@@ -31,6 +31,7 @@ from ..error_handling import UiError
 from ..executor import BatchExecutor, failed_rows_from_execution
 from ..import_export import dump_rows
 from ..models import AppSettings, FileBatchRow, MessageBatchRow, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json
+from ..presentation import execution_metrics, filter_executions, filter_templates, summarize_failures, template_metrics, template_type_label
 from ..settings_manager import SettingsManager
 from ..storage import AppStorage
 from ..worker import BatchWorker
@@ -181,19 +182,13 @@ class MainWindow(QMainWindow):
         templates = self._template_cache
         table = self.templates_page.table
         table.setRowCount(0)
-        filtered = []
-        for template in templates:
-            type_label = "批量消息" if template.task_type is TaskType.MESSAGE else "批量文件"
-            haystack = " ".join([template.name, type_label, template.updated_at or ""]).lower()
-            if query and query not in haystack:
-                continue
-            filtered.append(template)
+        filtered = filter_templates(templates, query)
         for row_index, template in enumerate(filtered):
             table.insertRow(row_index)
             values = [
                 str(template.id),
                 template.name,
-                "批量消息" if template.task_type is TaskType.MESSAGE else "批量文件",
+                template_type_label(template.task_type),
                 template.updated_at or "",
             ]
             for column_index, value in enumerate(values):
@@ -205,13 +200,10 @@ class MainWindow(QMainWindow):
                         item.setBackground(QColor("#fef3c7"))
                 table.setItem(row_index, column_index, item)
         table.resizeColumnsToContents()
-        self.templates_page.total_templates_label.value_label.setText(str(len(templates)))  # type: ignore[attr-defined]
-        self.templates_page.message_templates_label.value_label.setText(
-            str(sum(1 for item in templates if item.task_type is TaskType.MESSAGE))
-        )  # type: ignore[attr-defined]
-        self.templates_page.file_templates_label.value_label.setText(
-            str(sum(1 for item in templates if item.task_type is TaskType.FILE))
-        )  # type: ignore[attr-defined]
+        metrics = template_metrics(templates)
+        self.templates_page.total_templates_label.value_label.setText(str(metrics["total"]))  # type: ignore[attr-defined]
+        self.templates_page.message_templates_label.value_label.setText(str(metrics["message"]))  # type: ignore[attr-defined]
+        self.templates_page.file_templates_label.value_label.setText(str(metrics["file"]))  # type: ignore[attr-defined]
         if filtered:
             self.templates_page.summary_label.setText(
                 f"当前显示 {len(filtered)} / {len(templates)} 个模板。双击或选中后可加载到工作台。"
@@ -235,29 +227,12 @@ class MainWindow(QMainWindow):
         executions = self._execution_cache
         table = self.history_page.execution_table
         table.setRowCount(0)
-        filtered = []
-        for execution in executions:
-            if self.history_page.failed_only_checkbox.isChecked() and execution.failure_count == 0:
-                continue
-            type_label = "批量消息" if execution.task_type is TaskType.MESSAGE else "批量文件"
-            haystack = " ".join(
-                [
-                    str(execution.id or ""),
-                    type_label,
-                    execution.started_at,
-                    execution.status,
-                    str(execution.success_count),
-                    str(execution.failure_count),
-                ]
-            ).lower()
-            if query and query not in haystack:
-                continue
-            filtered.append(execution)
+        filtered = filter_executions(executions, query, self.history_page.failed_only_checkbox.isChecked())
         for row_index, execution in enumerate(filtered):
             table.insertRow(row_index)
             values = [
                 str(execution.id),
-                "批量消息" if execution.task_type is TaskType.MESSAGE else "批量文件",
+                template_type_label(execution.task_type),
                 execution.started_at,
                 execution.status,
                 str(execution.row_count),
@@ -275,11 +250,10 @@ class MainWindow(QMainWindow):
         self.history_page.detail_table.setRowCount(0)
         self.history_page.diagnostic_text.clear()
         self.history_page.failure_summary_label.setText("选中一条执行记录后，这里会展示失败原因摘要。")
-        success_runs = sum(1 for execution in executions if execution.failure_count == 0 and execution.status == "completed")
-        failed_runs = sum(1 for execution in executions if execution.failure_count > 0)
-        self.history_page.total_runs_label.value_label.setText(str(len(executions)))  # type: ignore[attr-defined]
-        self.history_page.success_runs_label.value_label.setText(str(success_runs))  # type: ignore[attr-defined]
-        self.history_page.failed_runs_label.value_label.setText(str(failed_runs))  # type: ignore[attr-defined]
+        metrics = execution_metrics(executions)
+        self.history_page.total_runs_label.value_label.setText(str(metrics["total"]))  # type: ignore[attr-defined]
+        self.history_page.success_runs_label.value_label.setText(str(metrics["success"]))  # type: ignore[attr-defined]
+        self.history_page.failed_runs_label.value_label.setText(str(metrics["failed"]))  # type: ignore[attr-defined]
         if filtered:
             self.history_page.summary_label.setText(
                 f"当前显示 {len(filtered)} / {len(executions)} 条执行记录。先选中一条，再看下方逐行结果。"
@@ -534,20 +508,7 @@ class MainWindow(QMainWindow):
                 table.setItem(row_index, column_index, item)
         table.resizeColumnsToContents()
         self.history_page.diagnostic_text.clear()
-        failure_counts: dict[str, int] = {}
-        for row in execution.rows:
-            if row.success:
-                continue
-            key = row.error_code or row.error_message or "未知原因"
-            failure_counts[key] = failure_counts.get(key, 0) + 1
-        if failure_counts:
-            ordered = sorted(failure_counts.items(), key=lambda item: (-item[1], item[0]))
-            text = "失败原因摘要：" + "；".join(f"{reason} x{count}" for reason, count in ordered[:4])
-            if len(ordered) > 4:
-                text += "；..."
-            self.history_page.failure_summary_label.setText(text)
-        else:
-            self.history_page.failure_summary_label.setText("这次执行没有失败项，全部处理成功。")
+        self.history_page.failure_summary_label.setText(summarize_failures(execution.rows))
 
     def show_selected_row_diagnostic(self) -> None:
         execution_id = self._selected_execution_id()
