@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QHeaderView,
@@ -84,6 +86,8 @@ class BatchTableWidget(QTableWidget):
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.setMinimumHeight(360)
         self.setWordWrap(True)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._open_context_menu)
         self._configure_columns()
 
     def _configure_columns(self) -> None:
@@ -137,14 +141,14 @@ class BatchTableWidget(QTableWidget):
             self.add_row()
 
     def remove_selected_rows(self) -> None:
-        indices = sorted({index.row() for index in self.selectedIndexes()}, reverse=True)
+        indices = sorted(self.selected_row_indices(), reverse=True)
         for row_index in indices:
             self.removeRow(row_index)
         if self.rowCount() == 0:
             self.add_row()
 
     def copy_selected_rows(self) -> None:
-        indices = sorted({index.row() for index in self.selectedIndexes()})
+        indices = self.selected_row_indices()
         if not indices:
             return
         lines = []
@@ -166,7 +170,7 @@ class BatchTableWidget(QTableWidget):
     def choose_files_for_selected_rows(self) -> None:
         if self.task_type is not TaskType.FILE:
             return
-        selected_rows = sorted({index.row() for index in self.selectedIndexes()})
+        selected_rows = self.selected_row_indices()
         if not selected_rows:
             QMessageBox.information(self, "选择文件", "请先选中至少一行。")
             return
@@ -246,6 +250,53 @@ class BatchTableWidget(QTableWidget):
             if column.key == key:
                 return index
         raise KeyError(key)
+
+    def selected_row_indices(self) -> list[int]:
+        return sorted({index.row() for index in self.selectedIndexes()})
+
+    def duplicate_selected_rows(self) -> None:
+        selected = self.selected_row_indices()
+        if not selected:
+            return
+        copied_rows = [self._row_to_mapping(row_index) for row_index in selected]
+        for row in copied_rows:
+            self.add_row(row)
+
+    def set_selected_enabled(self, enabled: bool) -> None:
+        selected = self.selected_row_indices()
+        if not selected:
+            return
+        column_index = self._column_index("enabled")
+        for row_index in selected:
+            self.item(row_index, column_index).setCheckState(
+                Qt.CheckState.Checked if enabled else Qt.CheckState.Unchecked
+            )
+
+    def clear_all_rows(self) -> None:
+        self.setRowCount(0)
+        self.add_row()
+
+    def _row_to_mapping(self, row_index: int) -> dict[str, Any]:
+        row_data: dict[str, Any] = {}
+        for column_index, column in enumerate(self.columns):
+            row_data[column.key] = self._cell_value(row_index, column_index, column)
+        return row_data
+
+    def _open_context_menu(self, position) -> None:
+        menu = QMenu(self)
+        duplicate_action = menu.addAction("复制选中行")
+        enable_action = menu.addAction("启用选中行")
+        disable_action = menu.addAction("停用选中行")
+        delete_action = menu.addAction("删除选中行")
+        selected_action = menu.exec(self.viewport().mapToGlobal(position))
+        if selected_action == duplicate_action:
+            self.duplicate_selected_rows()
+        elif selected_action == enable_action:
+            self.set_selected_enabled(True)
+        elif selected_action == disable_action:
+            self.set_selected_enabled(False)
+        elif selected_action == delete_action:
+            self.remove_selected_rows()
 
 
 def example_rows_for(task_type: TaskType) -> list[MessageBatchRow] | list[FileBatchRow]:
@@ -405,6 +456,8 @@ class BatchPage(QWidget):
         button_specs = [
             ("新增行", self._add_row),
             ("载入示例", self._load_example_rows),
+            ("启用选中", self._enable_selected_rows),
+            ("停用选中", self._disable_selected_rows),
             ("删除选中", self._remove_rows),
             ("复制行", self._copy_rows),
             ("粘贴行", self._paste_rows),
@@ -420,12 +473,13 @@ class BatchPage(QWidget):
                 ("加载模板", self._open_templates),
                 ("校验", self.validate_rows),
                 ("执行", self._request_run),
+                ("清空表格", self._clear_table),
                 ("停止", self.stop_requested.emit),
             ]
         )
         for text, callback in button_specs:
             button = QPushButton(text)
-            if text in {"删除选中", "停止", "保存模板", "加载模板"}:
+            if text in {"删除选中", "停止", "保存模板", "加载模板", "清空表格"}:
                 button.setProperty("variant", "secondary")
             if text in {"载入示例", "导入", "导出当前", "导出模板"}:
                 button.setProperty("variant", "ghost")
@@ -515,6 +569,14 @@ class BatchPage(QWidget):
     def _paste_rows(self) -> None:
         self.table.paste_rows()
 
+    def _enable_selected_rows(self) -> None:
+        self.table.set_selected_enabled(True)
+        self._update_summary("已启用选中行。")
+
+    def _disable_selected_rows(self) -> None:
+        self.table.set_selected_enabled(False)
+        self._update_summary("已停用选中行。")
+
     def _import_rows(self) -> None:
         try:
             self.table.import_rows()
@@ -540,6 +602,18 @@ class BatchPage(QWidget):
     def _load_example_rows(self) -> None:
         self.load_rows(example_rows_for(self.task_type))
         QMessageBox.information(self, "已载入示例", "示例数据已经放入表格，你可以直接改成自己的内容。")
+
+    def _clear_table(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "清空表格",
+            "确定清空当前表格吗？清空后会保留一行空白行，方便继续录入。",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.table.clear_all_rows()
+        self.pending_source_execution_id = None
+        self._update_summary("表格已清空。")
 
     def _update_summary(self, text: str) -> None:
         self.summary_label.setText(text)
@@ -579,6 +653,9 @@ class TemplatesPage(QWidget):
         helper.setProperty("role", "hint")
         helper.setWordWrap(True)
         card.body_layout.addWidget(helper)
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("搜索模板名称或类型，例如：消息、客户、通知")
+        card.body_layout.addWidget(self.search_input)
         self.summary_label = QLabel("还没有模板。你可以先去批量页面整理一份任务，再点“保存模板”。")
         self.summary_label.setProperty("role", "muted")
         self.summary_label.setWordWrap(True)
@@ -615,6 +692,9 @@ class HistoryPage(QWidget):
         helper.setProperty("role", "hint")
         helper.setWordWrap(True)
         history_card.body_layout.addWidget(helper)
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("搜索会话、状态或任务类型，例如：失败、客户A、文件")
+        history_card.body_layout.addWidget(self.search_input)
         self.summary_label = QLabel("还没有执行历史。第一次成功或失败执行后，这里会显示完整记录。")
         self.summary_label.setProperty("role", "muted")
         self.summary_label.setWordWrap(True)

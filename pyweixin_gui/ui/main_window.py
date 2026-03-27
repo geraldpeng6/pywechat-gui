@@ -52,6 +52,8 @@ class MainWindow(QMainWindow):
         self.executor = BatchExecutor(adapter)
         self.worker_thread: QThread | None = None
         self.worker: BatchWorker | None = None
+        self._template_cache: list[TaskTemplate] = []
+        self._execution_cache = []
 
         self.setWindowTitle("PyWeChat GUI 工作台")
         self.resize(self.settings.window_width, self.settings.window_height)
@@ -136,6 +138,7 @@ class MainWindow(QMainWindow):
         self.file_page.open_templates_requested.connect(self.open_templates_for)
 
         self.templates_page.refresh_button.clicked.connect(self.refresh_templates)
+        self.templates_page.search_input.textChanged.connect(self.apply_template_filter)
         self.templates_page.load_button.clicked.connect(self.load_selected_template)
         self.templates_page.delete_button.clicked.connect(self.delete_selected_template)
         self.templates_page.rename_button.clicked.connect(self.rename_selected_template)
@@ -143,6 +146,7 @@ class MainWindow(QMainWindow):
         self.templates_page.table.itemDoubleClicked.connect(lambda _item: self.load_selected_template())
 
         self.history_page.refresh_button.clicked.connect(self.refresh_history)
+        self.history_page.search_input.textChanged.connect(self.apply_history_filter)
         self.history_page.clear_button.clicked.connect(self.clear_history)
         self.history_page.execution_table.itemSelectionChanged.connect(self.show_execution_details)
         self.history_page.detail_table.itemSelectionChanged.connect(self.show_selected_row_diagnostic)
@@ -157,10 +161,22 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(status.status_message, 5000)
 
     def refresh_templates(self) -> None:
-        templates = self.storage.list_templates()
+        self._template_cache = self.storage.list_templates()
+        self.apply_template_filter()
+
+    def apply_template_filter(self) -> None:
+        query = self.templates_page.search_input.text().strip().lower()
+        templates = self._template_cache
         table = self.templates_page.table
         table.setRowCount(0)
-        for row_index, template in enumerate(templates):
+        filtered = []
+        for template in templates:
+            type_label = "批量消息" if template.task_type is TaskType.MESSAGE else "批量文件"
+            haystack = " ".join([template.name, type_label, template.updated_at or ""]).lower()
+            if query and query not in haystack:
+                continue
+            filtered.append(template)
+        for row_index, template in enumerate(filtered):
             table.insertRow(row_index)
             values = [
                 str(template.id),
@@ -171,16 +187,42 @@ class MainWindow(QMainWindow):
             for column_index, value in enumerate(values):
                 table.setItem(row_index, column_index, QTableWidgetItem(value))
         table.resizeColumnsToContents()
-        if templates:
-            self.templates_page.summary_label.setText(f"当前共有 {len(templates)} 个模板。双击或选中后可加载到工作台。")
+        if filtered:
+            self.templates_page.summary_label.setText(
+                f"当前显示 {len(filtered)} / {len(templates)} 个模板。双击或选中后可加载到工作台。"
+            )
         else:
-            self.templates_page.summary_label.setText("还没有模板。你可以先去批量页面整理一份任务，再点“保存模板”。")
+            if templates:
+                self.templates_page.summary_label.setText("没有匹配到模板，请换个关键词再试。")
+            else:
+                self.templates_page.summary_label.setText("还没有模板。你可以先去批量页面整理一份任务，再点“保存模板”。")
 
     def refresh_history(self) -> None:
-        executions = self.storage.list_executions()
+        self._execution_cache = self.storage.list_executions()
+        self.apply_history_filter()
+
+    def apply_history_filter(self) -> None:
+        query = self.history_page.search_input.text().strip().lower()
+        executions = self._execution_cache
         table = self.history_page.execution_table
         table.setRowCount(0)
-        for row_index, execution in enumerate(executions):
+        filtered = []
+        for execution in executions:
+            type_label = "批量消息" if execution.task_type is TaskType.MESSAGE else "批量文件"
+            haystack = " ".join(
+                [
+                    str(execution.id or ""),
+                    type_label,
+                    execution.started_at,
+                    execution.status,
+                    str(execution.success_count),
+                    str(execution.failure_count),
+                ]
+            ).lower()
+            if query and query not in haystack:
+                continue
+            filtered.append(execution)
+        for row_index, execution in enumerate(filtered):
             table.insertRow(row_index)
             values = [
                 str(execution.id),
@@ -192,14 +234,24 @@ class MainWindow(QMainWindow):
                 str(execution.failure_count),
             ]
             for column_index, value in enumerate(values):
-                table.setItem(row_index, column_index, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                if column_index == 3 and execution.status == "completed" and execution.failure_count == 0:
+                    item.setBackground(Qt.GlobalColor.green)
+                elif column_index == 3 and execution.failure_count > 0:
+                    item.setBackground(Qt.GlobalColor.yellow)
+                table.setItem(row_index, column_index, item)
         table.resizeColumnsToContents()
         self.history_page.detail_table.setRowCount(0)
         self.history_page.diagnostic_text.clear()
-        if executions:
-            self.history_page.summary_label.setText(f"当前共有 {len(executions)} 条执行记录。先选中一条，再看下方逐行结果。")
+        if filtered:
+            self.history_page.summary_label.setText(
+                f"当前显示 {len(filtered)} / {len(executions)} 条执行记录。先选中一条，再看下方逐行结果。"
+            )
         else:
-            self.history_page.summary_label.setText("还没有执行历史。第一次成功或失败执行后，这里会显示完整记录。")
+            if executions:
+                self.history_page.summary_label.setText("没有匹配到执行记录，请换个关键词再试。")
+            else:
+                self.history_page.summary_label.setText("还没有执行历史。第一次成功或失败执行后，这里会显示完整记录。")
 
     def _load_settings_to_form(self) -> None:
         page = self.settings_page
