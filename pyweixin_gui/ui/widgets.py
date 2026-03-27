@@ -739,6 +739,8 @@ class BatchPage(QWidget):
 
 class TemplatesPage(QWidget):
     load_template_requested = Signal(object, object)
+    create_message_requested = Signal()
+    create_file_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -752,8 +754,17 @@ class TemplatesPage(QWidget):
         self.duplicate_button.setProperty("variant", "secondary")
         self.delete_button = QPushButton("删除")
         self.delete_button.setProperty("variant", "secondary")
+        self.restore_button = QPushButton("恢复刚删除")
+        self.restore_button.setProperty("variant", "ghost")
         self.load_button = QPushButton("加载到工作台")
-        for button in [self.refresh_button, self.rename_button, self.duplicate_button, self.delete_button, self.load_button]:
+        for button in [
+            self.refresh_button,
+            self.rename_button,
+            self.duplicate_button,
+            self.delete_button,
+            self.restore_button,
+            self.load_button,
+        ]:
             toolbar.addWidget(button)
         toolbar.addStretch(1)
         card.body_layout.addLayout(toolbar)
@@ -775,6 +786,16 @@ class TemplatesPage(QWidget):
         self.summary_label.setProperty("role", "muted")
         self.summary_label.setWordWrap(True)
         card.body_layout.addWidget(self.summary_label)
+        self.empty_actions = QHBoxLayout()
+        self.create_message_button = QPushButton("新建消息任务")
+        self.create_file_button = QPushButton("新建文件任务")
+        self.create_file_button.setProperty("variant", "secondary")
+        self.empty_actions.addWidget(self.create_message_button)
+        self.empty_actions.addWidget(self.create_file_button)
+        self.empty_actions.addStretch(1)
+        card.body_layout.addLayout(self.empty_actions)
+        self.create_message_button.clicked.connect(lambda: self.create_message_requested.emit())
+        self.create_file_button.clicked.connect(lambda: self.create_file_requested.emit())
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["ID", "名称", "类型", "更新时间"])
         self.table.verticalHeader().setVisible(False)
@@ -800,6 +821,8 @@ class TemplatesPage(QWidget):
 class HistoryPage(QWidget):
     retry_failed_requested = Signal(object, object, object)
     clear_history_requested = Signal()
+    open_message_requested = Signal()
+    open_file_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -840,6 +863,16 @@ class HistoryPage(QWidget):
         self.failure_summary_label.setProperty("role", "hint")
         self.failure_summary_label.setWordWrap(True)
         history_card.body_layout.addWidget(self.failure_summary_label)
+        self.empty_actions = QHBoxLayout()
+        self.open_message_button = QPushButton("去批量消息")
+        self.open_file_button = QPushButton("去批量文件")
+        self.open_file_button.setProperty("variant", "secondary")
+        self.empty_actions.addWidget(self.open_message_button)
+        self.empty_actions.addWidget(self.open_file_button)
+        self.empty_actions.addStretch(1)
+        history_card.body_layout.addLayout(self.empty_actions)
+        self.open_message_button.clicked.connect(lambda: self.open_message_requested.emit())
+        self.open_file_button.clicked.connect(lambda: self.open_file_requested.emit())
 
         self.execution_table = QTableWidget(0, 7)
         self.execution_table.setHorizontalHeaderLabels(

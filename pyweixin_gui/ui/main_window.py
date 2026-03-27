@@ -57,6 +57,7 @@ class MainWindow(QMainWindow):
         self.worker: BatchWorker | None = None
         self._template_cache: list[TaskTemplate] = []
         self._execution_cache = []
+        self._last_deleted_template: TaskTemplate | None = None
 
         self.setWindowTitle("PyWeChat GUI 工作台")
         self.resize(self.settings.window_width, self.settings.window_height)
@@ -142,8 +143,11 @@ class MainWindow(QMainWindow):
 
         self.templates_page.refresh_button.clicked.connect(self.refresh_templates)
         self.templates_page.search_input.textChanged.connect(self.apply_template_filter)
+        self.templates_page.create_message_requested.connect(lambda: self.nav.setCurrentRow(1))
+        self.templates_page.create_file_requested.connect(lambda: self.nav.setCurrentRow(2))
         self.templates_page.load_button.clicked.connect(self.load_selected_template)
         self.templates_page.delete_button.clicked.connect(self.delete_selected_template)
+        self.templates_page.restore_button.clicked.connect(self.restore_deleted_template)
         self.templates_page.rename_button.clicked.connect(self.rename_selected_template)
         self.templates_page.duplicate_button.clicked.connect(self.duplicate_selected_template)
         self.templates_page.table.itemDoubleClicked.connect(lambda _item: self.load_selected_template())
@@ -151,9 +155,12 @@ class MainWindow(QMainWindow):
         self.history_page.refresh_button.clicked.connect(self.refresh_history)
         self.history_page.search_input.textChanged.connect(self.apply_history_filter)
         self.history_page.failed_only_checkbox.toggled.connect(self.apply_history_filter)
+        self.history_page.open_message_requested.connect(lambda: self.nav.setCurrentRow(1))
+        self.history_page.open_file_requested.connect(lambda: self.nav.setCurrentRow(2))
         self.history_page.clear_button.clicked.connect(self.clear_history)
         self.history_page.export_failed_button.clicked.connect(self.export_selected_execution_failures)
         self.history_page.execution_table.itemSelectionChanged.connect(self.show_execution_details)
+        self.history_page.execution_table.itemSelectionChanged.connect(self._update_history_action_state)
         self.history_page.detail_table.itemSelectionChanged.connect(self.show_selected_row_diagnostic)
         self.history_page.copy_diag_button.clicked.connect(self.copy_selected_row_diagnostic)
         self.history_page.retry_button.clicked.connect(self.retry_selected_execution_failures)
@@ -214,6 +221,10 @@ class MainWindow(QMainWindow):
                 self.templates_page.summary_label.setText("没有匹配到模板，请换个关键词再试。")
             else:
                 self.templates_page.summary_label.setText("还没有模板。你可以先去批量页面整理一份任务，再点“保存模板”。")
+        has_templates = bool(templates)
+        self.templates_page.create_message_button.setVisible(not has_templates)
+        self.templates_page.create_file_button.setVisible(not has_templates)
+        self.templates_page.restore_button.setEnabled(self._last_deleted_template is not None)
 
     def refresh_history(self) -> None:
         self._execution_cache = self.storage.list_executions()
@@ -278,6 +289,10 @@ class MainWindow(QMainWindow):
                 self.history_page.summary_label.setText("没有匹配到执行记录，请换个关键词再试。")
             else:
                 self.history_page.summary_label.setText("还没有执行历史。第一次成功或失败执行后，这里会显示完整记录。")
+        has_history = bool(executions)
+        self.history_page.open_message_button.setVisible(not has_history)
+        self.history_page.open_file_button.setVisible(not has_history)
+        self._update_history_action_state()
 
     def _load_settings_to_form(self) -> None:
         page = self.settings_page
@@ -356,9 +371,21 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(self, "删除模板", "确定删除这个模板吗？删除后不可恢复。")
         if answer != QMessageBox.StandardButton.Yes:
             return
+        self._last_deleted_template = self.storage.get_template(template_id)
         self.storage.delete_template(template_id)
         self.refresh_templates()
-        self.status_bar.showMessage("模板已删除", 4000)
+        self.status_bar.showMessage("模板已删除。如有需要，可点“恢复刚删除”。", 5000)
+
+    def restore_deleted_template(self) -> None:
+        if self._last_deleted_template is None:
+            QMessageBox.information(self, "恢复模板", "当前没有可恢复的模板。")
+            return
+        template = self._last_deleted_template
+        template.id = None
+        restored = self.storage.save_template(template)
+        self._last_deleted_template = None
+        self.refresh_templates()
+        self.status_bar.showMessage(f"已恢复模板：{restored.name}", 5000)
 
     def rename_selected_template(self) -> None:
         template_id = self._selected_template_id()
@@ -588,6 +615,7 @@ class MainWindow(QMainWindow):
             self.templates_page.duplicate_button,
             self.templates_page.delete_button,
             self.templates_page.load_button,
+            self.templates_page.restore_button,
             self.history_page.refresh_button,
             self.history_page.retry_button,
             self.history_page.export_failed_button,
@@ -596,6 +624,14 @@ class MainWindow(QMainWindow):
         ]:
             button.setEnabled(not is_running)
         self.history_page.failed_only_checkbox.setEnabled(not is_running)
+        if not is_running:
+            self._update_history_action_state()
+
+    def _update_history_action_state(self) -> None:
+        selected_execution = self._selected_execution_id()
+        has_selection = selected_execution is not None
+        self.history_page.export_failed_button.setEnabled(has_selection)
+        self.history_page.retry_button.setEnabled(has_selection)
 
     def _show_guidance_dialog(self, title: str, message: str, suggestion: str) -> None:
         dialog = QDialog(self)
