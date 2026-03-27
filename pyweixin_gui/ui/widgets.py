@@ -6,11 +6,13 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
@@ -260,6 +262,12 @@ class BatchTableWidget(QTableWidget):
                 return index
         raise KeyError(key)
 
+    def current_column_spec(self) -> ColumnSpec | None:
+        current_item = self.currentItem()
+        if current_item is None:
+            return None
+        return self.columns[current_item.column()]
+
     def selected_row_indices(self) -> list[int]:
         return sorted({index.row() for index in self.selectedIndexes()})
 
@@ -315,6 +323,19 @@ class BatchTableWidget(QTableWidget):
                 continue
             self.setItem(row_index, current_column, self._item_for_value(column, value))
         return True, f"已将“{column.title}”列的当前值套用到 {len(selected) - 1} 行。"
+
+    def apply_value_to_selected_rows(self, value: Any) -> tuple[bool, str]:
+        current_item = self.currentItem()
+        if current_item is None:
+            return False, "请先选中要批量填写的那一列中的任意单元格。"
+        selected = self.selected_row_indices()
+        if not selected:
+            return False, "请先选中至少一行。"
+        current_column = current_item.column()
+        column = self.columns[current_column]
+        for row_index in selected:
+            self.setItem(row_index, current_column, self._item_for_value(column, value))
+        return True, f"已将“{column.title}”列批量填写到 {len(selected)} 行。"
 
     def _row_to_mapping(self, row_index: int) -> dict[str, Any]:
         row_data: dict[str, Any] = {}
@@ -506,6 +527,7 @@ class BatchPage(QWidget):
             ("载入示例", self._load_example_rows),
             ("复制上一行", self._copy_previous_row),
             ("套用当前值", self._apply_current_value),
+            ("批量填写当前列", self._fill_current_column),
             ("启用选中", self._enable_selected_rows),
             ("停用选中", self._disable_selected_rows),
             ("删除选中", self._remove_rows),
@@ -531,7 +553,7 @@ class BatchPage(QWidget):
             button = QPushButton(text)
             if text in {"删除选中", "停止", "保存模板", "加载模板", "清空表格"}:
                 button.setProperty("variant", "secondary")
-            if text in {"载入示例", "导入", "导出当前", "导出模板", "复制上一行", "套用当前值"}:
+            if text in {"载入示例", "导入", "导出当前", "导出模板", "复制上一行", "套用当前值", "批量填写当前列"}:
                 button.setProperty("variant", "ghost")
             toolbar.addWidget(button)
             self._buttons[text] = button
@@ -668,6 +690,27 @@ class BatchPage(QWidget):
             return
         self._update_summary(message)
 
+    def _fill_current_column(self) -> None:
+        column = self.table.current_column_spec()
+        if column is None:
+            QMessageBox.information(self, "批量填写当前列", "请先选中要填写的列中的任意单元格。")
+            return
+        if column.kind == "bool":
+            label, ok = QInputDialog.getItem(self, "批量填写当前列", f"将“{column.title}”设置为：", ["是", "否"], editable=False)
+            if not ok:
+                return
+            value = label == "是"
+        else:
+            text, ok = QInputDialog.getText(self, "批量填写当前列", f"为“{column.title}”输入统一内容：")
+            if not ok:
+                return
+            value = text
+        applied, message = self.table.apply_value_to_selected_rows(value)
+        if not applied:
+            QMessageBox.information(self, "批量填写当前列", message)
+            return
+        self._update_summary(message)
+
     def _clear_table(self) -> None:
         answer = QMessageBox.question(
             self,
@@ -766,10 +809,13 @@ class HistoryPage(QWidget):
         toolbar = QHBoxLayout()
         self.refresh_button = QPushButton("刷新")
         self.retry_button = QPushButton("基于失败项重建任务")
+        self.export_failed_button = QPushButton("导出失败项")
         self.clear_button = QPushButton("清理历史")
         self.clear_button.setProperty("variant", "secondary")
-        for button in [self.refresh_button, self.retry_button, self.clear_button]:
+        self.failed_only_checkbox = QCheckBox("只看含失败记录")
+        for button in [self.refresh_button, self.retry_button, self.export_failed_button, self.clear_button]:
             toolbar.addWidget(button)
+        toolbar.addWidget(self.failed_only_checkbox)
         toolbar.addStretch(1)
         history_card.body_layout.addLayout(toolbar)
         helper = QLabel("先看成功/失败数量，再点开失败项。失败项可以一键回填到批量页面重新执行。")

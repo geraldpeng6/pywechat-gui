@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QHBoxLayout,
     QInputDialog,
     QListWidget,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from ..error_handling import UiError
 from ..executor import BatchExecutor, failed_rows_from_execution
+from ..import_export import dump_rows
 from ..models import AppSettings, FileBatchRow, MessageBatchRow, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json
 from ..settings_manager import SettingsManager
 from ..storage import AppStorage
@@ -148,7 +150,9 @@ class MainWindow(QMainWindow):
 
         self.history_page.refresh_button.clicked.connect(self.refresh_history)
         self.history_page.search_input.textChanged.connect(self.apply_history_filter)
+        self.history_page.failed_only_checkbox.toggled.connect(self.apply_history_filter)
         self.history_page.clear_button.clicked.connect(self.clear_history)
+        self.history_page.export_failed_button.clicked.connect(self.export_selected_execution_failures)
         self.history_page.execution_table.itemSelectionChanged.connect(self.show_execution_details)
         self.history_page.detail_table.itemSelectionChanged.connect(self.show_selected_row_diagnostic)
         self.history_page.copy_diag_button.clicked.connect(self.copy_selected_row_diagnostic)
@@ -222,6 +226,8 @@ class MainWindow(QMainWindow):
         table.setRowCount(0)
         filtered = []
         for execution in executions:
+            if self.history_page.failed_only_checkbox.isChecked() and execution.failure_count == 0:
+                continue
             type_label = "批量消息" if execution.task_type is TaskType.MESSAGE else "批量文件"
             haystack = " ".join(
                 [
@@ -584,10 +590,12 @@ class MainWindow(QMainWindow):
             self.templates_page.load_button,
             self.history_page.refresh_button,
             self.history_page.retry_button,
+            self.history_page.export_failed_button,
             self.history_page.clear_button,
             self.settings_page.save_button,
         ]:
             button.setEnabled(not is_running)
+        self.history_page.failed_only_checkbox.setEnabled(not is_running)
 
     def _show_guidance_dialog(self, title: str, message: str, suggestion: str) -> None:
         dialog = QDialog(self)
@@ -634,3 +642,27 @@ class MainWindow(QMainWindow):
         button_box.accepted.connect(dialog.accept)
         layout.addWidget(button_box)
         dialog.exec()
+
+    def export_selected_execution_failures(self) -> None:
+        execution_id = self._selected_execution_id()
+        if execution_id is None:
+            QMessageBox.information(self, "导出失败项", "请先选中一条执行记录。")
+            return
+        execution = self.storage.get_execution(execution_id)
+        failed_rows = failed_rows_from_execution(execution)
+        if not failed_rows:
+            QMessageBox.information(self, "导出失败项", "该执行记录没有失败项可导出。")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出失败项",
+            f"execution-{execution.id}-failed-rows.xlsx",
+            "Excel (*.xlsx);;CSV (*.csv)",
+        )
+        if not path:
+            return
+        try:
+            dump_rows(execution.task_type, failed_rows, path)
+            self.status_bar.showMessage("失败项已导出，可用于二次处理。", 5000)
+        except Exception as exc:
+            QMessageBox.critical(self, "导出失败项", str(exc))
