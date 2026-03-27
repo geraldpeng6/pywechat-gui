@@ -262,6 +262,20 @@ class BatchTableWidget(QTableWidget):
         for row in copied_rows:
             self.add_row(row)
 
+    def copy_previous_row_to_selected(self) -> bool:
+        selected = self.selected_row_indices()
+        if not selected:
+            return False
+        applied = False
+        for row_index in selected:
+            if row_index <= 0:
+                continue
+            previous_row = self._row_to_mapping(row_index - 1)
+            for column_index, column in enumerate(self.columns):
+                self.setItem(row_index, column_index, self._item_for_value(column, previous_row.get(column.key)))
+            applied = True
+        return applied
+
     def set_selected_enabled(self, enabled: bool) -> None:
         selected = self.selected_row_indices()
         if not selected:
@@ -456,6 +470,7 @@ class BatchPage(QWidget):
         button_specs = [
             ("新增行", self._add_row),
             ("载入示例", self._load_example_rows),
+            ("复制上一行", self._copy_previous_row),
             ("启用选中", self._enable_selected_rows),
             ("停用选中", self._disable_selected_rows),
             ("删除选中", self._remove_rows),
@@ -481,7 +496,7 @@ class BatchPage(QWidget):
             button = QPushButton(text)
             if text in {"删除选中", "停止", "保存模板", "加载模板", "清空表格"}:
                 button.setProperty("variant", "secondary")
-            if text in {"载入示例", "导入", "导出当前", "导出模板"}:
+            if text in {"载入示例", "导入", "导出当前", "导出模板", "复制上一行"}:
                 button.setProperty("variant", "ghost")
             toolbar.addWidget(button)
             self._buttons[text] = button
@@ -603,6 +618,13 @@ class BatchPage(QWidget):
         self.load_rows(example_rows_for(self.task_type))
         QMessageBox.information(self, "已载入示例", "示例数据已经放入表格，你可以直接改成自己的内容。")
 
+    def _copy_previous_row(self) -> None:
+        applied = self.table.copy_previous_row_to_selected()
+        if not applied:
+            QMessageBox.information(self, "复制上一行", "请先选中第 2 行及之后的行，才能复制上一行内容。")
+            return
+        self._update_summary("已把上一行内容复制到选中行。")
+
     def _clear_table(self) -> None:
         answer = QMessageBox.question(
             self,
@@ -695,6 +717,13 @@ class HistoryPage(QWidget):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索会话、状态或任务类型，例如：失败、客户A、文件")
         history_card.body_layout.addWidget(self.search_input)
+        stats_layout = QHBoxLayout()
+        self.total_runs_label = self._create_stat_card("总记录", "0")
+        self.success_runs_label = self._create_stat_card("全成功", "0")
+        self.failed_runs_label = self._create_stat_card("含失败", "0")
+        for card_widget in [self.total_runs_label, self.success_runs_label, self.failed_runs_label]:
+            stats_layout.addWidget(card_widget)
+        history_card.body_layout.addLayout(stats_layout)
         self.summary_label = QLabel("还没有执行历史。第一次成功或失败执行后，这里会显示完整记录。")
         self.summary_label.setProperty("role", "muted")
         self.summary_label.setWordWrap(True)
@@ -726,6 +755,18 @@ class HistoryPage(QWidget):
         detail_layout.addWidget(self.diagnostic_text)
         history_card.body_layout.addWidget(detail_group)
         layout.addWidget(history_card)
+
+    @staticmethod
+    def _create_stat_card(title: str, value: str) -> QWidget:
+        card = CardFrame()
+        title_label = QLabel(title)
+        title_label.setProperty("role", "statTitle")
+        value_label = QLabel(value)
+        value_label.setProperty("role", "statValue")
+        card.body_layout.addWidget(title_label)
+        card.body_layout.addWidget(value_label)
+        card.value_label = value_label  # type: ignore[attr-defined]
+        return card
 
 
 class SettingsPage(QWidget):

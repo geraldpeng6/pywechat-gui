@@ -55,6 +55,15 @@ QLabel[role="warn"] {
     border-radius: 10px;
     padding: 10px 12px;
 }
+QLabel[role="statTitle"] {
+    color: #64748b;
+    font-size: 12px;
+}
+QLabel[role="statValue"] {
+    color: #0f172a;
+    font-size: 20px;
+    font-weight: 700;
+}
 QGroupBox {
     margin-top: 12px;
     padding-top: 14px;

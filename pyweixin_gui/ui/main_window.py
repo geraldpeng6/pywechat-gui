@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtCore import QThread, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -236,13 +237,18 @@ class MainWindow(QMainWindow):
             for column_index, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if column_index == 3 and execution.status == "completed" and execution.failure_count == 0:
-                    item.setBackground(Qt.GlobalColor.green)
+                    item.setBackground(QColor("#dcfce7"))
                 elif column_index == 3 and execution.failure_count > 0:
-                    item.setBackground(Qt.GlobalColor.yellow)
+                    item.setBackground(QColor("#fef3c7"))
                 table.setItem(row_index, column_index, item)
         table.resizeColumnsToContents()
         self.history_page.detail_table.setRowCount(0)
         self.history_page.diagnostic_text.clear()
+        success_runs = sum(1 for execution in executions if execution.failure_count == 0 and execution.status == "completed")
+        failed_runs = sum(1 for execution in executions if execution.failure_count > 0)
+        self.history_page.total_runs_label.value_label.setText(str(len(executions)))  # type: ignore[attr-defined]
+        self.history_page.success_runs_label.value_label.setText(str(success_runs))  # type: ignore[attr-defined]
+        self.history_page.failed_runs_label.value_label.setText(str(failed_runs))  # type: ignore[attr-defined]
         if filtered:
             self.history_page.summary_label.setText(
                 f"当前显示 {len(filtered)} / {len(executions)} 条执行记录。先选中一条，再看下方逐行结果。"
@@ -462,7 +468,12 @@ class MainWindow(QMainWindow):
                 result.error_message or "",
             ]
             for column_index, value in enumerate(values):
-                table.setItem(row_index, column_index, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                if not result.success:
+                    item.setBackground(QColor("#fef2f2"))
+                elif column_index == 2:
+                    item.setBackground(QColor("#f0fdf4"))
+                table.setItem(row_index, column_index, item)
         table.resizeColumnsToContents()
         self.history_page.diagnostic_text.clear()
 
