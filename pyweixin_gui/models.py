@@ -249,6 +249,45 @@ class EnvironmentStatus:
     advice: list[str] = field(default_factory=list)
 
 
+@dataclass
+class ChatExportRequest:
+    session_name: str
+    target_folder: str
+    export_messages: bool = True
+    export_files: bool = True
+    export_images: bool = False
+    message_limit: int = 100
+    file_limit: int = 50
+
+    def validate(self) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        if not self.session_name.strip():
+            errors["session_name"] = "会话名称不能为空"
+        if not self.target_folder.strip():
+            errors["target_folder"] = "请选择导出文件夹"
+        if not self.export_messages and not self.export_files:
+            errors["export_scope"] = "请至少勾选一种导出内容"
+        if self.message_limit <= 0:
+            errors["message_limit"] = "消息条数必须大于 0"
+        if self.file_limit <= 0:
+            errors["file_limit"] = "文件数量必须大于 0"
+        return errors
+
+
+@dataclass
+class ChatExportResult:
+    session_name: str
+    export_folder: str
+    message_count: int = 0
+    file_count: int = 0
+    messages_csv: str | None = None
+    messages_json: str | None = None
+    files_folder: str | None = None
+    summary_json: str | None = None
+    summary_txt: str | None = None
+    warnings: list[str] = field(default_factory=list)
+
+
 def dataclass_to_json(items: list[MessageBatchRow] | list[FileBatchRow]) -> str:
     return json.dumps([asdict(item) for item in items], ensure_ascii=False)
 

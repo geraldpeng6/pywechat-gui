@@ -29,13 +29,15 @@ from PySide6.QtWidgets import (
 
 from ..error_handling import UiError
 from ..executor import BatchExecutor, failed_rows_from_execution
+from ..export_service import ChatExportService
+from ..export_worker import ChatExportWorker
 from ..import_export import dump_rows
-from ..models import AppSettings, FileBatchRow, MessageBatchRow, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json
+from ..models import AppSettings, ChatExportRequest, ChatExportResult, FileBatchRow, MessageBatchRow, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json
 from ..presentation import execution_metrics, filter_executions, filter_templates, summarize_failures, template_metrics, template_type_label
 from ..settings_manager import SettingsManager
 from ..storage import AppStorage
 from ..worker import BatchWorker
-from .widgets import BatchPage, DashboardPage, HistoryPage, SettingsPage, TemplatesPage
+from .widgets import BatchPage, DashboardPage, ExportPage, HistoryPage, SettingsPage, TemplatesPage
 
 
 class MainWindow(QMainWindow):
@@ -54,8 +56,9 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.logger = logger
         self.executor = BatchExecutor(adapter)
+        self.export_service = ChatExportService(adapter)
         self.worker_thread: QThread | None = None
-        self.worker: BatchWorker | None = None
+        self.worker = None
         self._template_cache: list[TaskTemplate] = []
         self._execution_cache = []
         self._last_deleted_template: TaskTemplate | None = None
@@ -87,6 +90,7 @@ class MainWindow(QMainWindow):
         self.dashboard_page = DashboardPage()
         self.message_page = BatchPage(TaskType.MESSAGE, "批量消息")
         self.file_page = BatchPage(TaskType.FILE, "批量文件")
+        self.export_page = ExportPage()
         self.templates_page = TemplatesPage()
         self.history_page = HistoryPage()
         self.settings_page = SettingsPage()
@@ -94,6 +98,7 @@ class MainWindow(QMainWindow):
         self._add_page("首页", self.dashboard_page)
         self._add_page("批量消息", self.message_page)
         self._add_page("批量文件", self.file_page)
+        self._add_page("会话导出", self.export_page)
         self._add_page("模板中心", self.templates_page)
         self._add_page("执行历史", self.history_page)
         self._add_page("设置", self.settings_page)
@@ -132,11 +137,13 @@ class MainWindow(QMainWindow):
         self.dashboard_page.refresh_requested.connect(self.refresh_environment)
         self.dashboard_page.open_message_requested.connect(lambda: self.nav.setCurrentRow(1))
         self.dashboard_page.open_file_requested.connect(lambda: self.nav.setCurrentRow(2))
-        self.dashboard_page.open_templates_requested.connect(lambda: self.nav.setCurrentRow(3))
+        self.dashboard_page.open_templates_requested.connect(lambda: self.nav.setCurrentRow(4))
         self.message_page.run_requested.connect(lambda rows, src: self.start_batch(TaskType.MESSAGE, rows, src))
         self.file_page.run_requested.connect(lambda rows, src: self.start_batch(TaskType.FILE, rows, src))
         self.message_page.stop_requested.connect(self.stop_batch)
         self.file_page.stop_requested.connect(self.stop_batch)
+        self.export_page.export_requested.connect(self.start_export)
+        self.export_page.stop_requested.connect(self.stop_batch)
         self.message_page.save_template_requested.connect(self.save_template)
         self.file_page.save_template_requested.connect(self.save_template)
         self.message_page.open_templates_requested.connect(self.open_templates_for)
@@ -309,7 +316,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("模板已保存，下次可以在模板中心直接加载。", 4000)
 
     def open_templates_for(self, task_type: TaskType) -> None:
-        self.nav.setCurrentRow(3)
+        self.nav.setCurrentRow(4)
         table = self.templates_page.table
         for row_index in range(table.rowCount()):
             if table.item(row_index, 2).text() == ("批量消息" if task_type is TaskType.MESSAGE else "批量文件"):
@@ -431,6 +438,38 @@ class MainWindow(QMainWindow):
         self._set_running_state(True)
         self.status_bar.showMessage("任务已开始执行。执行期间请不要手动操作微信。", 5000)
 
+    def start_export(self, request: ChatExportRequest) -> None:
+        if self.worker_thread is not None:
+            QMessageBox.warning(self, "任务进行中", "当前已有任务在执行，请等待完成或先停止。")
+            return
+        environment = self.adapter.inspect_environment()
+        if environment.login_status != "已登录":
+            self.nav.setCurrentRow(0)
+            self._show_guidance_dialog(
+                title="暂时不能执行导出",
+                message=environment.status_message,
+                suggestion="\n".join(environment.advice) if environment.advice else "请先解决首页提示的问题，再回来导出。",
+            )
+            return
+        self.worker_thread = QThread(self)
+        self.worker = ChatExportWorker(self.export_service, request, self.settings.runtime_options())
+        self.worker.moveToThread(self.worker_thread)
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker.progress.connect(self._handle_export_progress)
+        self.worker.finished.connect(self._handle_export_finished)
+        self.worker.failed.connect(self._handle_worker_failure)
+        self.worker.finished.connect(self.worker_thread.quit)
+        self.worker.failed.connect(self.worker_thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.failed.connect(self.worker.deleteLater)
+        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+        self.worker_thread.finished.connect(self._cleanup_worker)
+        self.worker_thread.start()
+        self._set_running_state(True)
+        self.export_page.result_text.clear()
+        self.export_page.summary_label.setText("导出任务已开始，请勿手动操作微信。")
+        self.status_bar.showMessage("导出任务已开始，请等待完成。", 5000)
+
     def stop_batch(self) -> None:
         if self.worker is None:
             return
@@ -467,8 +506,35 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.information(self, "任务完成", f"任务执行完成，共成功处理 {saved.success_count} 行。")
 
+    def _handle_export_progress(self, message: str) -> None:
+        self.export_page.summary_label.setText(message)
+        self.status_bar.showMessage(message, 3000)
+
+    def _handle_export_finished(self, result: ChatExportResult) -> None:
+        lines = [
+            f"会话名称：{result.session_name}",
+            f"导出目录：{result.export_folder}",
+            f"消息数量：{result.message_count}",
+            f"文件数量：{result.file_count}",
+        ]
+        if result.messages_csv:
+            lines.append(f"消息 CSV：{result.messages_csv}")
+        if result.messages_json:
+            lines.append(f"消息 JSON：{result.messages_json}")
+        if result.files_folder:
+            lines.append(f"文件目录：{result.files_folder}")
+        if result.warnings:
+            lines.append("")
+            lines.append("注意事项：")
+            lines.extend(f"- {warning}" for warning in result.warnings)
+        self.export_page.result_text.setPlainText("\n".join(lines))
+        self.export_page.summary_label.setText("导出完成。你可以直接打开导出目录查看结果。")
+        self.status_bar.showMessage("会话导出完成。", 5000)
+        QMessageBox.information(self, "导出完成", f"已完成会话导出。\n目录：{result.export_folder}")
+
     def _handle_worker_failure(self, ui_error: UiError) -> None:
         self.logger.error("Batch worker failed: %s", ui_error.diagnostic_text)
+        self.export_page.summary_label.setText("任务执行失败，请查看错误详情。")
         self._show_error_dialog(ui_error, "任务执行失败")
 
     def _cleanup_worker(self) -> None:
@@ -570,6 +636,7 @@ class MainWindow(QMainWindow):
     def _set_running_state(self, is_running: bool) -> None:
         self.message_page.set_running_state(is_running)
         self.file_page.set_running_state(is_running)
+        self.export_page.set_running_state(is_running)
         for button in [
             self.templates_page.refresh_button,
             self.templates_page.rename_button,

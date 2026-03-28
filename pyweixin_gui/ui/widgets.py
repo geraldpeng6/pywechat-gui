@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..import_export import dump_rows, load_rows
-from ..models import FileBatchRow, MessageBatchRow, TaskType, clone_row
+from ..models import ChatExportRequest, FileBatchRow, MessageBatchRow, TaskType, clone_row
 
 
 @dataclass
@@ -735,6 +735,143 @@ class BatchPage(QWidget):
             else:
                 button.setEnabled(not is_running)
         self.table.setDisabled(is_running)
+
+
+class ExportPage(QWidget):
+    export_requested = Signal(object)
+    stop_requested = Signal()
+
+    def __init__(self, parent: QWidget | None = None):
+        from PySide6.QtWidgets import QCheckBox, QFormLayout, QSpinBox
+
+        super().__init__(parent)
+        self._buttons: dict[str, QPushButton] = {}
+        layout = QVBoxLayout(self)
+        card = CardFrame("会话导出", hero=True)
+        subtitle = QLabel("一键导出指定好友或群聊的文本记录和聊天文件，适合做留档、交接和二次处理。")
+        subtitle.setProperty("role", "pageSubtitle")
+        subtitle.setWordWrap(True)
+        card.body_layout.addWidget(subtitle)
+        helper = QLabel(
+            "当前基于库原生能力稳定支持：文本消息、聊天文件。历史图片/视频一键导出能力目前仍有限，界面会明确提示。"
+        )
+        helper.setProperty("role", "warn")
+        helper.setWordWrap(True)
+        card.body_layout.addWidget(helper)
+
+        form = QFormLayout()
+        form.setSpacing(14)
+        self.session_name_input = QLineEdit()
+        self.session_name_input.setPlaceholderText("填写微信群名、好友备注或会话名称")
+        self.target_folder_input = QLineEdit()
+        self.target_folder_input.setPlaceholderText("选择导出目录")
+        self.choose_folder_button = QPushButton("选择文件夹")
+        self.choose_folder_button.setProperty("variant", "ghost")
+        target_row = QHBoxLayout()
+        target_row.addWidget(self.target_folder_input)
+        target_row.addWidget(self.choose_folder_button)
+
+        self.export_messages_checkbox = QCheckBox("导出文本消息")
+        self.export_messages_checkbox.setChecked(True)
+        self.export_files_checkbox = QCheckBox("导出聊天文件")
+        self.export_files_checkbox.setChecked(True)
+        self.export_images_checkbox = QCheckBox("尝试导出图片/视频（当前库支持有限）")
+        self.export_images_checkbox.setChecked(False)
+
+        self.message_limit_spin = QSpinBox()
+        self.message_limit_spin.setRange(1, 5000)
+        self.message_limit_spin.setValue(100)
+        self.file_limit_spin = QSpinBox()
+        self.file_limit_spin.setRange(1, 5000)
+        self.file_limit_spin.setValue(50)
+
+        form.addRow("会话名称", self.session_name_input)
+        form.addRow("导出目录", target_row)
+        form.addRow("消息条数", self.message_limit_spin)
+        form.addRow("文件数量", self.file_limit_spin)
+        form.addRow("导出文本", self.export_messages_checkbox)
+        form.addRow("导出文件", self.export_files_checkbox)
+        form.addRow("图片/视频", self.export_images_checkbox)
+        card.body_layout.addLayout(form)
+
+        toolbar = QHBoxLayout()
+        for text, callback in [
+            ("示例填充", self._load_example),
+            ("一键导出", self._request_export),
+            ("停止", self.stop_requested.emit),
+        ]:
+            button = QPushButton(text)
+            if text == "示例填充":
+                button.setProperty("variant", "ghost")
+            if text == "停止":
+                button.setProperty("variant", "secondary")
+            toolbar.addWidget(button)
+            self._buttons[text] = button
+            button.clicked.connect(lambda _checked=False, cb=callback: cb())
+        toolbar.addStretch(1)
+        card.body_layout.addLayout(toolbar)
+
+        self.summary_label = QLabel("准备就绪。建议先确认微信状态正常，再导出指定会话。")
+        self.summary_label.setProperty("role", "muted")
+        self.summary_label.setWordWrap(True)
+        card.body_layout.addWidget(self.summary_label)
+
+        self.result_text = QTextEdit()
+        self.result_text.setReadOnly(True)
+        self.result_text.setPlaceholderText("导出完成后，这里会显示导出结果、目录和注意事项。")
+        card.body_layout.addWidget(self.result_text)
+        layout.addWidget(card)
+        self.choose_folder_button.clicked.connect(self._choose_folder)
+        self.set_running_state(False)
+
+    def current_request(self) -> tuple[ChatExportRequest | None, dict[str, str]]:
+        request = ChatExportRequest(
+            session_name=self.session_name_input.text().strip(),
+            target_folder=self.target_folder_input.text().strip(),
+            export_messages=self.export_messages_checkbox.isChecked(),
+            export_files=self.export_files_checkbox.isChecked(),
+            export_images=self.export_images_checkbox.isChecked(),
+            message_limit=self.message_limit_spin.value(),
+            file_limit=self.file_limit_spin.value(),
+        )
+        errors = request.validate()
+        return (None, errors) if errors else (request, {})
+
+    def _request_export(self) -> None:
+        request, errors = self.current_request()
+        if errors:
+            first_error = next(iter(errors.values()))
+            QMessageBox.warning(self, "导出参数不完整", first_error)
+            self.summary_label.setText("导出参数不完整，请先补齐后再执行。")
+            return
+        self.export_requested.emit(request)
+
+    def _choose_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "选择导出目录")
+        if path:
+            self.target_folder_input.setText(path)
+
+    def _load_example(self) -> None:
+        self.session_name_input.setText("项目群")
+        self.summary_label.setText("已填入示例会话名称，你可以直接改成自己的群名或好友备注。")
+
+    def set_running_state(self, is_running: bool) -> None:
+        for name, button in self._buttons.items():
+            if name == "停止":
+                button.setEnabled(is_running)
+            else:
+                button.setEnabled(not is_running)
+        self.choose_folder_button.setEnabled(not is_running)
+        for widget in [
+            self.session_name_input,
+            self.target_folder_input,
+            self.export_messages_checkbox,
+            self.export_files_checkbox,
+            self.export_images_checkbox,
+            self.message_limit_spin,
+            self.file_limit_spin,
+        ]:
+            widget.setEnabled(not is_running)
 
 
 class TemplatesPage(QWidget):

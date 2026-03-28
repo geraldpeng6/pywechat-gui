@@ -127,6 +127,26 @@ class PyWeixinAdapter:
             close_weixin=options.close_weixin,
         )
 
+    def dump_chat_history(self, session_name: str, number: int, options: RuntimeOptions) -> tuple[list[str], list[str]]:
+        pyweixin = self._load_pyweixin()
+        return pyweixin.Messages.dump_chat_history(
+            friend=session_name,
+            number=number,
+            search_pages=options.search_pages,
+            is_maximize=options.is_maximize,
+            close_weixin=options.close_weixin,
+        )
+
+    def save_chat_files(self, session_name: str, number: int, target_folder: str, options: RuntimeOptions) -> list[str]:
+        pyweixin = self._load_pyweixin()
+        return pyweixin.Files.save_chatfiles(
+            friend=session_name,
+            number=number,
+            target_folder=target_folder,
+            is_maximize=options.is_maximize,
+            close_weixin=options.close_weixin,
+        )
+
     @staticmethod
     def map_runtime_exception(exc: BaseException) -> UiError:
         return map_exception(exc)
