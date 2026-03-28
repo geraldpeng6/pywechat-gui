@@ -795,11 +795,7 @@ class ExportPage(QWidget):
         card.body_layout.addLayout(form)
 
         toolbar = QHBoxLayout()
-        for text, callback in [
-            ("示例填充", self._load_example),
-            ("一键导出", self._request_export),
-            ("停止", self.stop_requested.emit),
-        ]:
+        for text, callback in [("示例填充", self._load_example), ("一键导出", self._request_export), ("停止", self.stop_requested.emit)]:
             button = QPushButton(text)
             if text == "示例填充":
                 button.setProperty("variant", "ghost")
@@ -821,8 +817,58 @@ class ExportPage(QWidget):
         self.result_text.setPlaceholderText("导出完成后，这里会显示导出结果、目录和注意事项。")
         card.body_layout.addWidget(self.result_text)
         layout.addWidget(card)
+
         self.choose_folder_button.clicked.connect(self._choose_folder)
         self.set_running_state(False)
+
+    def current_request(self) -> tuple[ChatExportRequest | None, dict[str, str]]:
+        request = ChatExportRequest(
+            session_name=self.session_name_input.text().strip(),
+            target_folder=self.target_folder_input.text().strip(),
+            export_messages=self.export_messages_checkbox.isChecked(),
+            export_files=self.export_files_checkbox.isChecked(),
+            export_images=self.export_images_checkbox.isChecked(),
+            message_limit=self.message_limit_spin.value(),
+            file_limit=self.file_limit_spin.value(),
+        )
+        errors = request.validate()
+        return (None, errors) if errors else (request, {})
+
+    def _request_export(self) -> None:
+        request, errors = self.current_request()
+        if errors:
+            first_error = next(iter(errors.values()))
+            QMessageBox.warning(self, "导出参数不完整", first_error)
+            self.summary_label.setText("导出参数不完整，请先补齐后再执行。")
+            return
+        self.export_requested.emit(request)
+
+    def _choose_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "选择导出目录")
+        if path:
+            self.target_folder_input.setText(path)
+
+    def _load_example(self) -> None:
+        self.session_name_input.setText("项目群")
+        self.summary_label.setText("已填入示例会话名称，你可以直接改成自己的群名或好友备注。")
+
+    def set_running_state(self, is_running: bool) -> None:
+        for name, button in self._buttons.items():
+            if name == "停止":
+                button.setEnabled(is_running)
+            else:
+                button.setEnabled(not is_running)
+        self.choose_folder_button.setEnabled(not is_running)
+        for widget in [
+            self.session_name_input,
+            self.target_folder_input,
+            self.export_messages_checkbox,
+            self.export_files_checkbox,
+            self.export_images_checkbox,
+            self.message_limit_spin,
+            self.file_limit_spin,
+        ]:
+            widget.setEnabled(not is_running)
 
 
 class ResourceToolsPage(QWidget):
@@ -940,57 +986,8 @@ class ResourceToolsPage(QWidget):
         self.choose_folder_button.setEnabled(not is_running)
         self.kind_combo.setEnabled(not is_running)
         self.target_folder_input.setEnabled(not is_running)
-        self.year_spin.setEnabled(not is_running)
+        self.year_spin.setEnabled(not is_running and self.kind_combo.currentData() in {ResourceExportKind.WXFILES, ResourceExportKind.VIDEOS})
         self.month_spin.setEnabled(not is_running and self.kind_combo.currentData() in {ResourceExportKind.WXFILES, ResourceExportKind.VIDEOS})
-
-    def current_request(self) -> tuple[ChatExportRequest | None, dict[str, str]]:
-        request = ChatExportRequest(
-            session_name=self.session_name_input.text().strip(),
-            target_folder=self.target_folder_input.text().strip(),
-            export_messages=self.export_messages_checkbox.isChecked(),
-            export_files=self.export_files_checkbox.isChecked(),
-            export_images=self.export_images_checkbox.isChecked(),
-            message_limit=self.message_limit_spin.value(),
-            file_limit=self.file_limit_spin.value(),
-        )
-        errors = request.validate()
-        return (None, errors) if errors else (request, {})
-
-    def _request_export(self) -> None:
-        request, errors = self.current_request()
-        if errors:
-            first_error = next(iter(errors.values()))
-            QMessageBox.warning(self, "导出参数不完整", first_error)
-            self.summary_label.setText("导出参数不完整，请先补齐后再执行。")
-            return
-        self.export_requested.emit(request)
-
-    def _choose_folder(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "选择导出目录")
-        if path:
-            self.target_folder_input.setText(path)
-
-    def _load_example(self) -> None:
-        self.session_name_input.setText("项目群")
-        self.summary_label.setText("已填入示例会话名称，你可以直接改成自己的群名或好友备注。")
-
-    def set_running_state(self, is_running: bool) -> None:
-        for name, button in self._buttons.items():
-            if name == "停止":
-                button.setEnabled(is_running)
-            else:
-                button.setEnabled(not is_running)
-        self.choose_folder_button.setEnabled(not is_running)
-        for widget in [
-            self.session_name_input,
-            self.target_folder_input,
-            self.export_messages_checkbox,
-            self.export_files_checkbox,
-            self.export_images_checkbox,
-            self.message_limit_spin,
-            self.file_limit_spin,
-        ]:
-            widget.setEnabled(not is_running)
 
 
 class TemplatesPage(QWidget):
