@@ -32,12 +32,14 @@ from ..executor import BatchExecutor, failed_rows_from_execution
 from ..export_service import ChatExportService
 from ..export_worker import ChatExportWorker
 from ..import_export import dump_rows
-from ..models import AppSettings, ChatExportRequest, ChatExportResult, FileBatchRow, MessageBatchRow, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json
+from ..models import AppSettings, ChatExportRequest, ChatExportResult, FileBatchRow, MessageBatchRow, ResourceExportRequest, ResourceExportResult, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json
 from ..presentation import execution_metrics, filter_executions, filter_templates, summarize_failures, template_metrics, template_type_label
+from ..resource_export_service import ResourceExportService, export_kind_label
+from ..resource_export_worker import ResourceExportWorker
 from ..settings_manager import SettingsManager
 from ..storage import AppStorage
 from ..worker import BatchWorker
-from .widgets import BatchPage, DashboardPage, ExportPage, HistoryPage, SettingsPage, TemplatesPage
+from .widgets import BatchPage, DashboardPage, ExportPage, HistoryPage, ResourceToolsPage, SettingsPage, TemplatesPage
 
 
 class MainWindow(QMainWindow):
@@ -57,6 +59,7 @@ class MainWindow(QMainWindow):
         self.logger = logger
         self.executor = BatchExecutor(adapter)
         self.export_service = ChatExportService(adapter)
+        self.resource_export_service = ResourceExportService(adapter)
         self.worker_thread: QThread | None = None
         self.worker = None
         self._template_cache: list[TaskTemplate] = []
@@ -91,6 +94,7 @@ class MainWindow(QMainWindow):
         self.message_page = BatchPage(TaskType.MESSAGE, "批量消息")
         self.file_page = BatchPage(TaskType.FILE, "批量文件")
         self.export_page = ExportPage()
+        self.resource_page = ResourceToolsPage()
         self.templates_page = TemplatesPage()
         self.history_page = HistoryPage()
         self.settings_page = SettingsPage()
@@ -99,6 +103,7 @@ class MainWindow(QMainWindow):
         self._add_page("批量消息", self.message_page)
         self._add_page("批量文件", self.file_page)
         self._add_page("会话导出", self.export_page)
+        self._add_page("资源导出", self.resource_page)
         self._add_page("模板中心", self.templates_page)
         self._add_page("执行历史", self.history_page)
         self._add_page("设置", self.settings_page)
@@ -144,6 +149,8 @@ class MainWindow(QMainWindow):
         self.file_page.stop_requested.connect(self.stop_batch)
         self.export_page.export_requested.connect(self.start_export)
         self.export_page.stop_requested.connect(self.stop_batch)
+        self.resource_page.export_requested.connect(self.start_resource_export)
+        self.resource_page.stop_requested.connect(self.stop_batch)
         self.message_page.save_template_requested.connect(self.save_template)
         self.file_page.save_template_requested.connect(self.save_template)
         self.message_page.open_templates_requested.connect(self.open_templates_for)
@@ -470,6 +477,38 @@ class MainWindow(QMainWindow):
         self.export_page.summary_label.setText("导出任务已开始，请勿手动操作微信。")
         self.status_bar.showMessage("导出任务已开始，请等待完成。", 5000)
 
+    def start_resource_export(self, request: ResourceExportRequest) -> None:
+        if self.worker_thread is not None:
+            QMessageBox.warning(self, "任务进行中", "当前已有任务在执行，请等待完成或先停止。")
+            return
+        environment = self.adapter.inspect_environment()
+        if environment.login_status != "已登录":
+            self.nav.setCurrentRow(0)
+            self._show_guidance_dialog(
+                title="暂时不能执行导出",
+                message=environment.status_message,
+                suggestion="\n".join(environment.advice) if environment.advice else "请先解决首页提示的问题，再回来导出。",
+            )
+            return
+        self.worker_thread = QThread(self)
+        self.worker = ResourceExportWorker(self.resource_export_service, request, self.settings.runtime_options())
+        self.worker.moveToThread(self.worker_thread)
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker.progress.connect(self._handle_resource_export_progress)
+        self.worker.finished.connect(self._handle_resource_export_finished)
+        self.worker.failed.connect(self._handle_worker_failure)
+        self.worker.finished.connect(self.worker_thread.quit)
+        self.worker.failed.connect(self.worker_thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.failed.connect(self.worker.deleteLater)
+        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+        self.worker_thread.finished.connect(self._cleanup_worker)
+        self.worker_thread.start()
+        self._set_running_state(True)
+        self.resource_page.result_text.clear()
+        self.resource_page.summary_label.setText("资源导出已开始，请等待完成。")
+        self.status_bar.showMessage("资源导出已开始，请等待完成。", 5000)
+
     def stop_batch(self) -> None:
         if self.worker is None:
             return
@@ -531,6 +570,29 @@ class MainWindow(QMainWindow):
         self.export_page.summary_label.setText("导出完成。你可以直接打开导出目录查看结果。")
         self.status_bar.showMessage("会话导出完成。", 5000)
         QMessageBox.information(self, "导出完成", f"已完成会话导出。\n目录：{result.export_folder}")
+
+    def _handle_resource_export_progress(self, message: str) -> None:
+        self.resource_page.summary_label.setText(message)
+        self.status_bar.showMessage(message, 3000)
+
+    def _handle_resource_export_finished(self, result: ResourceExportResult) -> None:
+        lines = [
+            f"导出类型：{export_kind_label(result.export_kind)}",
+            f"导出目录：{result.target_folder}",
+            f"导出数量：{result.exported_count}",
+        ]
+        if result.summary_txt:
+            lines.append(f"摘要文件：{result.summary_txt}")
+        if result.exported_paths:
+            lines.append("")
+            lines.append("导出结果预览：")
+            lines.extend(f"- {path}" for path in result.exported_paths[:10])
+            if len(result.exported_paths) > 10:
+                lines.append(f"- ... 共 {len(result.exported_paths)} 项")
+        self.resource_page.result_text.setPlainText("\n".join(lines))
+        self.resource_page.summary_label.setText("资源导出完成。你可以直接打开导出目录查看结果。")
+        self.status_bar.showMessage("资源导出完成。", 5000)
+        QMessageBox.information(self, "导出完成", f"已完成资源导出。\n目录：{result.target_folder}")
 
     def _handle_worker_failure(self, ui_error: UiError) -> None:
         self.logger.error("Batch worker failed: %s", ui_error.diagnostic_text)
@@ -637,6 +699,7 @@ class MainWindow(QMainWindow):
         self.message_page.set_running_state(is_running)
         self.file_page.set_running_state(is_running)
         self.export_page.set_running_state(is_running)
+        self.resource_page.set_running_state(is_running)
         for button in [
             self.templates_page.refresh_button,
             self.templates_page.rename_button,

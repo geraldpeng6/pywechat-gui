@@ -1,0 +1,35 @@
+from __future__ import annotations
+
+from PySide6.QtCore import QObject, Signal
+
+from .error_handling import map_exception
+from .models import ResourceExportRequest, RuntimeOptions
+from .resource_export_service import ResourceExportService
+
+
+class ResourceExportWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object)
+    failed = Signal(object)
+
+    def __init__(self, service: ResourceExportService, request: ResourceExportRequest, runtime_options: RuntimeOptions):
+        super().__init__()
+        self.service = service
+        self.request = request
+        self.runtime_options = runtime_options
+        self._stop_requested = False
+
+    def request_stop(self) -> None:
+        self._stop_requested = True
+
+    def run(self) -> None:
+        try:
+            result = self.service.run_export(
+                request=self.request,
+                runtime_options=self.runtime_options,
+                on_progress=self.progress.emit,
+                should_stop=lambda: self._stop_requested,
+            )
+            self.finished.emit(result)
+        except Exception as exc:  # pragma: no cover - GUI runtime safety
+            self.failed.emit(map_exception(exc))

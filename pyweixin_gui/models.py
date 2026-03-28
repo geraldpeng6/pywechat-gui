@@ -288,6 +288,39 @@ class ChatExportResult:
     warnings: list[str] = field(default_factory=list)
 
 
+class ResourceExportKind(str, Enum):
+    RECENT_FILES = "recent_files"
+    WXFILES = "wxfiles"
+    VIDEOS = "videos"
+
+
+@dataclass
+class ResourceExportRequest:
+    export_kind: ResourceExportKind
+    target_folder: str
+    year: str = datetime.now().strftime("%Y")
+    month: str = ""
+
+    def validate(self) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        if not self.target_folder.strip():
+            errors["target_folder"] = "请选择导出文件夹"
+        if not self.year.isdigit() or len(self.year) != 4:
+            errors["year"] = "年份必须是 4 位数字，例如 2026"
+        if self.month and (not self.month.isdigit() or not 1 <= int(self.month) <= 12):
+            errors["month"] = "月份必须是 1-12 之间的数字"
+        return errors
+
+
+@dataclass
+class ResourceExportResult:
+    export_kind: ResourceExportKind
+    target_folder: str
+    exported_count: int
+    exported_paths: list[str] = field(default_factory=list)
+    summary_txt: str | None = None
+
+
 def dataclass_to_json(items: list[MessageBatchRow] | list[FileBatchRow]) -> str:
     return json.dumps([asdict(item) for item in items], ensure_ascii=False)
 

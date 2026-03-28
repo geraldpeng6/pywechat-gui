@@ -147,6 +147,30 @@ class PyWeixinAdapter:
             close_weixin=options.close_weixin,
         )
 
+    def export_recent_files(self, target_folder: str, options: RuntimeOptions) -> list[str]:
+        pyweixin = self._load_pyweixin()
+        return pyweixin.Files.export_recent_files(
+            target_folder=target_folder,
+            is_maximize=options.is_maximize,
+            close_weixin=options.close_weixin,
+        )
+
+    def export_wxfiles(self, year: str, month: str | None, target_folder: str) -> list[str]:
+        pyweixin = self._load_pyweixin()
+        return pyweixin.Files.export_wxfiles(
+            year=year,
+            month=month,
+            target_folder=target_folder,
+        )
+
+    def export_videos(self, year: str, month: str | None, target_folder: str) -> list[str]:
+        pyweixin = self._load_pyweixin()
+        return pyweixin.Files.export_videos(
+            year=year,
+            month=month,
+            target_folder=target_folder,
+        )
+
     @staticmethod
     def map_runtime_exception(exc: BaseException) -> UiError:
         return map_exception(exc)

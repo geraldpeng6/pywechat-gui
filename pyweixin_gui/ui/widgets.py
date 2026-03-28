@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..import_export import dump_rows, load_rows
-from ..models import ChatExportRequest, FileBatchRow, MessageBatchRow, TaskType, clone_row
+from ..models import ChatExportRequest, FileBatchRow, MessageBatchRow, ResourceExportKind, ResourceExportRequest, TaskType, clone_row
 
 
 @dataclass
@@ -823,6 +823,125 @@ class ExportPage(QWidget):
         layout.addWidget(card)
         self.choose_folder_button.clicked.connect(self._choose_folder)
         self.set_running_state(False)
+
+
+class ResourceToolsPage(QWidget):
+    export_requested = Signal(object)
+    stop_requested = Signal()
+
+    def __init__(self, parent: QWidget | None = None):
+        from PySide6.QtWidgets import QComboBox, QFormLayout, QSpinBox
+
+        super().__init__(parent)
+        self._buttons: dict[str, QPushButton] = {}
+        layout = QVBoxLayout(self)
+        card = CardFrame("资源导出工具", hero=True)
+        subtitle = QLabel("把微信已经保存在本地的聊天文件、最近文件、聊天视频快速归档出来。")
+        subtitle.setProperty("role", "pageSubtitle")
+        subtitle.setWordWrap(True)
+        card.body_layout.addWidget(subtitle)
+        helper = QLabel("这些能力依赖微信本地已存在的文件。若聊天文件或视频从未下载过，本工具无法补出云端内容。")
+        helper.setProperty("role", "warn")
+        helper.setWordWrap(True)
+        card.body_layout.addWidget(helper)
+
+        form = QFormLayout()
+        form.setSpacing(14)
+        self.kind_combo = QComboBox()
+        self.kind_combo.addItem("导出最近聊天文件", ResourceExportKind.RECENT_FILES)
+        self.kind_combo.addItem("按年月导出微信聊天文件", ResourceExportKind.WXFILES)
+        self.kind_combo.addItem("按年月导出微信聊天视频", ResourceExportKind.VIDEOS)
+        self.target_folder_input = QLineEdit()
+        self.target_folder_input.setPlaceholderText("选择导出目录")
+        self.choose_folder_button = QPushButton("选择文件夹")
+        self.choose_folder_button.setProperty("variant", "ghost")
+        target_row = QHBoxLayout()
+        target_row.addWidget(self.target_folder_input)
+        target_row.addWidget(self.choose_folder_button)
+        self.year_spin = QSpinBox()
+        self.year_spin.setRange(2020, 2100)
+        self.year_spin.setValue(2026)
+        self.month_spin = QSpinBox()
+        self.month_spin.setRange(0, 12)
+        self.month_spin.setSpecialValueText("全部月份")
+        self.month_spin.setValue(0)
+        form.addRow("导出类型", self.kind_combo)
+        form.addRow("导出目录", target_row)
+        form.addRow("年份", self.year_spin)
+        form.addRow("月份", self.month_spin)
+        card.body_layout.addLayout(form)
+
+        toolbar = QHBoxLayout()
+        for text, callback in [("示例填充", self._load_example), ("开始导出", self._request_export), ("停止", self.stop_requested.emit)]:
+            button = QPushButton(text)
+            if text == "示例填充":
+                button.setProperty("variant", "ghost")
+            if text == "停止":
+                button.setProperty("variant", "secondary")
+            toolbar.addWidget(button)
+            self._buttons[text] = button
+            button.clicked.connect(lambda _checked=False, cb=callback: cb())
+        toolbar.addStretch(1)
+        card.body_layout.addLayout(toolbar)
+
+        self.summary_label = QLabel("可用于做资料归档、交接备份和排查本地已下载的素材。")
+        self.summary_label.setProperty("role", "muted")
+        self.summary_label.setWordWrap(True)
+        card.body_layout.addWidget(self.summary_label)
+        self.result_text = QTextEdit()
+        self.result_text.setReadOnly(True)
+        self.result_text.setPlaceholderText("导出完成后，这里会显示导出数量、目录和摘要文件。")
+        card.body_layout.addWidget(self.result_text)
+        layout.addWidget(card)
+
+        self.choose_folder_button.clicked.connect(self._choose_folder)
+        self.kind_combo.currentIndexChanged.connect(self._sync_form_state)
+        self._sync_form_state()
+        self.set_running_state(False)
+
+    def current_request(self) -> tuple[ResourceExportRequest | None, dict[str, str]]:
+        request = ResourceExportRequest(
+            export_kind=self.kind_combo.currentData(),
+            target_folder=self.target_folder_input.text().strip(),
+            year=str(self.year_spin.value()),
+            month="" if self.month_spin.value() == 0 else f"{self.month_spin.value():02d}",
+        )
+        errors = request.validate()
+        return (None, errors) if errors else (request, {})
+
+    def _request_export(self) -> None:
+        request, errors = self.current_request()
+        if errors:
+            QMessageBox.warning(self, "导出参数不完整", next(iter(errors.values())))
+            self.summary_label.setText("导出参数不完整，请先补齐后再执行。")
+            return
+        self.export_requested.emit(request)
+
+    def _choose_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "选择导出目录")
+        if path:
+            self.target_folder_input.setText(path)
+
+    def _load_example(self) -> None:
+        self.summary_label.setText("示例已填好。你可以直接改年份和导出目录。")
+
+    def _sync_form_state(self) -> None:
+        kind = self.kind_combo.currentData()
+        show_year_month = kind in {ResourceExportKind.WXFILES, ResourceExportKind.VIDEOS}
+        self.year_spin.setEnabled(show_year_month)
+        self.month_spin.setEnabled(show_year_month)
+
+    def set_running_state(self, is_running: bool) -> None:
+        for name, button in self._buttons.items():
+            if name == "停止":
+                button.setEnabled(is_running)
+            else:
+                button.setEnabled(not is_running)
+        self.choose_folder_button.setEnabled(not is_running)
+        self.kind_combo.setEnabled(not is_running)
+        self.target_folder_input.setEnabled(not is_running)
+        self.year_spin.setEnabled(not is_running)
+        self.month_spin.setEnabled(not is_running and self.kind_combo.currentData() in {ResourceExportKind.WXFILES, ResourceExportKind.VIDEOS})
 
     def current_request(self) -> tuple[ChatExportRequest | None, dict[str, str]]:
         request = ChatExportRequest(
