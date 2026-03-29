@@ -56,6 +56,11 @@ pip install .[dev-gui]
 pyinstaller pyweixin_gui.spec
 ```
 
+GitHub Actions 自动打包：
+- 已提供 Windows 自动打包工作流：`.github/workflows/build-windows.yml`
+- 推送到 `main` 或手动触发后，会自动生成 `pywechat-gui-windows.zip`
+- 可在 GitHub Actions 的运行产物里直接下载
+
 说明：
 - GUI 只面向 `pyweixin`，不兼容旧版 `pywechat`
 - 建议在 Windows 10/11 上使用
