@@ -3,7 +3,8 @@
 from pathlib import Path
 
 
-workspace = Path(__file__).resolve().parent
+# PyInstaller executes spec files in a custom context where __file__ is not guaranteed.
+workspace = Path(globals().get("SPECPATH", Path.cwd())).resolve()
 
 block_cipher = None
 
