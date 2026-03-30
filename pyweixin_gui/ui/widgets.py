@@ -1095,8 +1095,10 @@ class SessionToolsPage(QWidget):
 
         session_options = QHBoxLayout()
         self.chatted_only_checkbox = QCheckBox("只采集聊过天的会话")
-        self.no_official_checkbox = QCheckBox("自动排除公众号")
+        self.no_official_checkbox = QCheckBox("自动排除公众号（当前版本暂不支持）")
         self.no_official_checkbox.setChecked(True)
+        self.no_official_checkbox.setEnabled(False)
+        self.no_official_checkbox.setToolTip("当前 pyweixin 还没有提供公众号过滤参数，后续版本再补。")
         session_options.addWidget(self.chatted_only_checkbox)
         session_options.addWidget(self.no_official_checkbox)
         session_options.addStretch(1)
@@ -1139,7 +1141,7 @@ class SessionToolsPage(QWidget):
         group_toolbar.addStretch(1)
         group_card.body_layout.addLayout(group_toolbar)
 
-        self.group_summary_label = QLabel("如果你记不清准确群名，可以先采集群聊列表，再直接回填到批量会话导出。")
+        self.group_summary_label = QLabel("如果你记不清准确群名，可以先采集群聊列表，再直接回填到批量会话导出。当前版本暂不提供群人数。")
         self.group_summary_label.setProperty("role", "muted")
         self.group_summary_label.setWordWrap(True)
         group_card.body_layout.addWidget(self.group_summary_label)
@@ -1159,7 +1161,7 @@ class SessionToolsPage(QWidget):
         group_card.body_layout.addLayout(form)
 
         member_toolbar = QHBoxLayout()
-        self.load_members_button = QPushButton("读取群成员")
+        self.load_members_button = QPushButton("读取群成员（暂不支持）")
         self.export_members_button = QPushButton("导出群成员名单")
         self.export_members_button.setProperty("variant", "secondary")
         member_toolbar.addWidget(self.load_members_button)
@@ -1167,7 +1169,7 @@ class SessionToolsPage(QWidget):
         member_toolbar.addStretch(1)
         group_card.body_layout.addLayout(member_toolbar)
 
-        self.member_summary_label = QLabel("成员名单适合做通知范围确认、群运营交接和名单备份。")
+        self.member_summary_label = QLabel("当前仓库里的 pyweixin 暂未提供群成员名单采集能力，这里先保留入口位置，后续再接。")
         self.member_summary_label.setProperty("role", "muted")
         self.member_summary_label.setWordWrap(True)
         group_card.body_layout.addWidget(self.member_summary_label)
@@ -1195,6 +1197,8 @@ class SessionToolsPage(QWidget):
         self.export_members_button.setEnabled(False)
         self.use_sessions_button.setEnabled(False)
         self.use_groups_button.setEnabled(False)
+        self.load_members_button.setEnabled(False)
+        self.group_name_input.setEnabled(False)
         self.set_running_state(False)
 
     def _request_scan_sessions(self) -> None:
@@ -1235,7 +1239,7 @@ class SessionToolsPage(QWidget):
         self.group_table.resizeColumnsToContents()
         self.export_groups_button.setEnabled(bool(rows))
         self.use_groups_button.setEnabled(bool(rows))
-        self.group_summary_label.setText(f"已采集 {len(rows)} 个群聊，可直接导出群聊名单或回填到会话导出页。")
+        self.group_summary_label.setText(f"已采集 {len(rows)} 个群聊，可直接导出群聊名单或回填到会话导出页。群人数在当前版本里暂不可得。")
 
     def set_group_members(self, group_name: str, rows: list[GroupMemberRow]) -> None:
         self.group_name_input.setText(group_name)
@@ -1252,13 +1256,13 @@ class SessionToolsPage(QWidget):
     def set_running_state(self, is_running: bool) -> None:
         for widget in [
             self.chatted_only_checkbox,
-            self.no_official_checkbox,
             self.scan_sessions_button,
             self.scan_groups_button,
-            self.load_members_button,
-            self.group_name_input,
         ]:
             widget.setEnabled(not is_running)
+        self.no_official_checkbox.setEnabled(False)
+        self.load_members_button.setEnabled(False)
+        self.group_name_input.setEnabled(False)
         if is_running:
             self.export_sessions_button.setEnabled(False)
             self.export_groups_button.setEnabled(False)
@@ -1268,7 +1272,7 @@ class SessionToolsPage(QWidget):
         else:
             self.export_sessions_button.setEnabled(self.session_table.rowCount() > 0)
             self.export_groups_button.setEnabled(self.group_table.rowCount() > 0)
-            self.export_members_button.setEnabled(self.member_table.rowCount() > 0)
+            self.export_members_button.setEnabled(False)
             self.use_sessions_button.setEnabled(self.session_table.rowCount() > 0)
             self.use_groups_button.setEnabled(self.group_table.rowCount() > 0)
 

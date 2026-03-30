@@ -47,6 +47,7 @@ _KNOWN_ERRORS = {
     "TimeNotCorrectError": ("INVALID_TIME", "时间格式不合法", "请使用库支持的时间格式。"),
     "NetWorkError": ("NETWORK_ERROR", "网络不可用", "请确认网络连接正常，再重新执行。"),
     "ValueError": ("INVALID_INPUT", "输入无效", "请检查当前任务行中的必填项和字段格式。"),
+    "NotImplementedError": ("FEATURE_UNAVAILABLE", "当前版本暂不支持该能力", "请先使用当前版本已支持的功能，或等待后续版本补齐。"),
 }
 
 

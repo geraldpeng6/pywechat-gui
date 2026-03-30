@@ -173,59 +173,38 @@ class PyWeixinAdapter:
 
     def dump_sessions(self, chatted_only: bool, no_official: bool, options: RuntimeOptions) -> list[SessionSummaryRow]:
         pyweixin = self._load_pyweixin()
-        names, times, messages = pyweixin.Messages.dump_sessions(
-            chatted_only=chatted_only,
-            no_official=no_official,
+        sessions = pyweixin.Messages.dump_sessions(
+            chat_only=chatted_only,
             is_maximize=options.is_maximize,
-            close_wechat=options.close_weixin,
+            close_weixin=options.close_weixin,
         )
         return [
             SessionSummaryRow(
-                session_name=str(name or "").strip(),
-                last_time=str(times[index] or "").strip() if index < len(times) else "",
-                last_message=str(messages[index] or "").strip() if index < len(messages) else "",
+                session_name=str(session[0] or "").strip(),
+                last_time=str(session[1] or "").strip() if len(session) > 1 else "",
+                last_message=str(session[2] or "").strip() if len(session) > 2 else "",
             )
-            for index, name in enumerate(names)
-            if str(name or "").strip()
+            for session in sessions
+            if session and str(session[0] or "").strip()
         ]
 
     def dump_groups(self, options: RuntimeOptions) -> list[GroupSummaryRow]:
         pyweixin = self._load_pyweixin()
         groups = pyweixin.Contacts.get_groups_info(
-            is_json=False,
             is_maximize=options.is_maximize,
-            close_wechat=options.close_weixin,
+            close_weixin=options.close_weixin,
         )
         return [
             GroupSummaryRow(
-                group_name=str(group.get("群聊名称", "")).strip(),
-                member_count=str(group.get("群聊人数", "")).strip(),
+                group_name=str(group or "").strip(),
+                member_count="",
             )
             for group in groups
-            if str(group.get("群聊名称", "")).strip()
+            if str(group or "").strip()
         ]
 
     def dump_group_members(self, group_name: str, options: RuntimeOptions) -> list[GroupMemberRow]:
-        pyweixin = self._load_pyweixin()
-        info = pyweixin.Contacts.get_group_members_info(
-            group_name=group_name,
-            is_json=False,
-            search_pages=options.search_pages,
-            is_maximize=options.is_maximize,
-            close_wechat=options.close_weixin,
-        )
-        aliases = info.get("群成员群昵称", []) or []
-        nicknames = info.get("群成员昵称", []) or []
-        rows: list[GroupMemberRow] = []
-        for index, alias in enumerate(aliases):
-            rows.append(
-                GroupMemberRow(
-                    group_name=group_name,
-                    alias=str(alias or "").strip(),
-                    nickname=str(nicknames[index] or "").strip() if index < len(nicknames) else "",
-                )
-            )
-        return rows
+        raise NotImplementedError("当前 pyweixin 暂未提供群成员名单采集能力。")
 
     @staticmethod
     def map_runtime_exception(exc: BaseException) -> UiError:
