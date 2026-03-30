@@ -3,7 +3,7 @@ from __future__ import annotations
 import platform
 
 from .error_handling import UiError, map_exception
-from .models import EnvironmentStatus, FileBatchRow, GroupSummaryRow, MessageBatchRow, RuntimeOptions, SessionSummaryRow
+from .models import EnvironmentStatus, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayItemType, RelayPackageRow, RuntimeOptions, SessionSummaryRow
 from . import __version__
 
 
@@ -201,6 +201,30 @@ class PyWeixinAdapter:
             for group in groups
             if str(group or "").strip()
         ]
+
+    def validate_session(self, session_name: str, options: RuntimeOptions) -> None:
+        pyweixin = self._load_pyweixin()
+        pyweixin.Navigator.open_dialog_window(
+            friend=session_name,
+            is_maximize=options.is_maximize,
+            search_pages=options.search_pages,
+        )
+
+    def send_relay_item(self, target_session: str, item: RelayPackageRow, options: RuntimeOptions) -> None:
+        if item.item_type is RelayItemType.TEXT:
+            row = MessageBatchRow(
+                session_name=target_session,
+                message=item.content,
+                clear_before_send=options.clear,
+            )
+            self.send_message(row, options)
+            return
+        row = FileBatchRow(
+            session_name=target_session,
+            file_paths=item.file_path,
+            with_message=False,
+        )
+        self.send_file(row, options)
 
     @staticmethod
     def map_runtime_exception(exc: BaseException) -> UiError:

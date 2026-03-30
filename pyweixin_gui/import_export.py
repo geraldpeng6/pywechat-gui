@@ -4,7 +4,7 @@ import csv
 from pathlib import Path
 from typing import Any
 
-from .models import FileBatchRow, MessageBatchRow, TaskType
+from .models import FileBatchRow, MessageBatchRow, RelayRouteRow, TaskType
 
 try:
     from openpyxl import Workbook, load_workbook
@@ -33,6 +33,33 @@ FILE_HEADERS = [
     "message_first",
     "remark",
 ]
+
+ROUTE_HEADERS = [
+    "enabled",
+    "upstream_session",
+    "downstream_session",
+    "remark",
+]
+
+ROUTE_TEMPLATE_HEADERS = [
+    "启用",
+    "上游会话",
+    "下游会话",
+    "备注",
+]
+
+ROUTE_HEADER_ALIASES = {
+    "enabled": "enabled",
+    "启用": "enabled",
+    "upstream_session": "upstream_session",
+    "上游会话": "upstream_session",
+    "source_session": "upstream_session",
+    "downstream_session": "downstream_session",
+    "下游会话": "downstream_session",
+    "target_session": "downstream_session",
+    "remark": "remark",
+    "备注": "remark",
+}
 
 
 def headers_for(task_type: TaskType) -> list[str]:
@@ -83,6 +110,18 @@ def load_rows(task_type: TaskType, path: str | Path) -> list[MessageBatchRow] | 
     return [FileBatchRow.from_mapping(row) for row in rows]
 
 
+def load_route_rows(path: str | Path) -> list[RelayRouteRow]:
+    file_path = Path(path)
+    if file_path.suffix.lower() == ".csv":
+        rows = _load_csv_rows(file_path)
+    elif file_path.suffix.lower() == ".xlsx":
+        rows = _load_xlsx_rows(file_path)
+    else:
+        raise ValueError("路由表仅支持导入 .csv 或 .xlsx 文件")
+    normalized = [_normalize_route_mapping(row) for row in rows]
+    return [RelayRouteRow.from_mapping(row) for row in normalized]
+
+
 def dump_table(headers: list[str], rows: list[dict[str, Any]], path: str | Path) -> None:
     file_path = Path(path)
     if file_path.suffix.lower() == ".csv":
@@ -107,6 +146,20 @@ def dump_table(headers: list[str], rows: list[dict[str, Any]], path: str | Path)
 
 def dump_rows(task_type: TaskType, rows: list[dict[str, Any]], path: str | Path) -> None:
     dump_table(headers_for(task_type), rows, path)
+
+
+def dump_route_rows(rows: list[dict[str, Any]], path: str | Path) -> None:
+    template_rows = []
+    for row in rows:
+        template_rows.append(
+            {
+                "启用": row.get("enabled", ""),
+                "上游会话": row.get("upstream_session", ""),
+                "下游会话": row.get("downstream_session", ""),
+                "备注": row.get("remark", ""),
+            }
+        )
+    dump_table(ROUTE_TEMPLATE_HEADERS, template_rows, path)
 
 
 def load_session_names(path: str | Path) -> list[str]:
@@ -138,3 +191,13 @@ def _extract_session_names(rows: list[dict[str, Any]]) -> list[str]:
                 values.append(text)
                 break
     return values
+
+
+def _normalize_route_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for key, value in mapping.items():
+        text_key = str(key or "").strip()
+        canonical = ROUTE_HEADER_ALIASES.get(text_key)
+        if canonical:
+            normalized[canonical] = value
+    return normalized

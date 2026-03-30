@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pyweixin_gui.import_export import dump_rows, dump_table, load_rows, load_session_names
+from pyweixin_gui.import_export import dump_route_rows, dump_rows, dump_table, load_route_rows, load_rows, load_session_names
 from pyweixin_gui.models import TaskType
 
 
@@ -63,6 +63,29 @@ class ImportExportTestCase(unittest.TestCase):
                 path,
             )
             self.assertEqual(load_session_names(path), ["项目群", "客户群"])
+
+    def test_load_route_rows_from_csv_with_chinese_headers(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "routes.csv"
+            dump_table(
+                ["启用", "上游会话", "下游会话", "备注"],
+                [
+                    {"启用": True, "上游会话": "上游A", "下游会话": "下游B", "备注": "客户"},
+                    {"启用": False, "上游会话": "上游A", "下游会话": "下游C", "备注": ""},
+                ],
+                path,
+            )
+            rows = load_route_rows(path)
+            self.assertEqual(rows[0].upstream_session, "上游A")
+            self.assertEqual(rows[0].downstream_session, "下游B")
+            self.assertFalse(rows[1].enabled)
+
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl not installed")
+    def test_dump_route_rows_template(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "route-template.xlsx"
+            dump_route_rows([], path)
+            self.assertTrue(path.exists())
 
 
 if __name__ == "__main__":

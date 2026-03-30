@@ -29,8 +29,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..import_export import dump_rows, dump_table, load_rows, load_session_names
-from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupSummaryRow, MessageBatchRow, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row
+from ..import_export import dump_route_rows, dump_rows, dump_table, load_route_rows, load_rows, load_session_names
+from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectTextRequest, RelayItemType, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelayValidationRequest, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row
 
 
 @dataclass
@@ -1258,6 +1258,465 @@ class SessionToolsPage(QWidget):
         if not path:
             return
         dump_table(headers, rows, path)
+
+
+class RelayWorkbenchPage(QWidget):
+    collect_texts_requested = Signal(object)
+    collect_files_requested = Signal(object)
+    validate_routes_requested = Signal(object)
+    test_send_requested = Signal(object)
+    send_requested = Signal(object)
+
+    PACKAGE_COLUMNS = [
+        ("enabled", "启用", "bool"),
+        ("sequence", "顺序", "int"),
+        ("item_type", "类型", "text"),
+        ("source_session", "来源会话", "text"),
+        ("content", "内容预览", "text"),
+        ("file_path", "本地路径", "text"),
+        ("collected_at", "采集时间", "text"),
+        ("remark", "备注", "text"),
+    ]
+
+    ROUTE_COLUMNS = [
+        ("enabled", "启用", "bool"),
+        ("upstream_session", "上游会话", "text"),
+        ("downstream_session", "下游会话", "text"),
+        ("validation_status", "验证状态", "text"),
+        ("validation_message", "说明", "text"),
+        ("remark", "备注", "text"),
+    ]
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._running = False
+        layout = QVBoxLayout(self)
+
+        source_card = CardFrame("转发工作台", hero=True)
+        intro = QLabel("先从上游采集候选内容，再人工勾选、调整顺序、验证下游，最后测试发送或正式批量发送。")
+        intro.setProperty("role", "pageSubtitle")
+        intro.setWordWrap(True)
+        source_card.body_layout.addWidget(intro)
+        helper = QLabel("当前基于 pyweixin 已稳定支持：文本消息采集、聊天文件采集、本地文件/图片补充、下游会话验证、测试发送到文件传输助手。")
+        helper.setProperty("role", "hint")
+        helper.setWordWrap(True)
+        source_card.body_layout.addWidget(helper)
+
+        form = QFormLayout()
+        form.setSpacing(14)
+        self.source_session_input = QLineEdit()
+        self.source_session_input.setPlaceholderText("填写上游 A 的会话名称")
+        self.package_name_input = QLineEdit()
+        self.package_name_input.setPlaceholderText("可选，例如：A客户-0422转发包")
+        self.message_limit_spin = QSpinBox()
+        self.message_limit_spin.setRange(1, 500)
+        self.message_limit_spin.setValue(20)
+        self.file_limit_spin = QSpinBox()
+        self.file_limit_spin.setRange(1, 200)
+        self.file_limit_spin.setValue(10)
+        form.addRow("上游会话", self.source_session_input)
+        form.addRow("转发包名称", self.package_name_input)
+        form.addRow("文本采集条数", self.message_limit_spin)
+        form.addRow("文件采集数量", self.file_limit_spin)
+        source_card.body_layout.addLayout(form)
+
+        source_actions = QHBoxLayout()
+        self.collect_texts_button = QPushButton("采集文本")
+        self.collect_files_button = QPushButton("采集文件")
+        self.add_text_button = QPushButton("手动加文本")
+        self.add_files_button = QPushButton("补充本地文件/图片")
+        self.clear_package_button = QPushButton("清空转发包")
+        self.clear_package_button.setProperty("variant", "secondary")
+        for button in [self.collect_texts_button, self.collect_files_button, self.add_text_button, self.add_files_button, self.clear_package_button]:
+            source_actions.addWidget(button)
+        source_actions.addStretch(1)
+        source_card.body_layout.addLayout(source_actions)
+        self.package_summary_label = QLabel("先采集文本或文件，再在下方表格里人工勾选真正要转发的内容。")
+        self.package_summary_label.setProperty("role", "muted")
+        self.package_summary_label.setWordWrap(True)
+        source_card.body_layout.addWidget(self.package_summary_label)
+        layout.addWidget(source_card)
+
+        package_card = CardFrame("转发包编辑器")
+        package_toolbar = QHBoxLayout()
+        self.move_up_button = QPushButton("上移")
+        self.move_down_button = QPushButton("下移")
+        self.remove_package_button = QPushButton("删除选中")
+        self.remove_package_button.setProperty("variant", "secondary")
+        for button in [self.move_up_button, self.move_down_button, self.remove_package_button]:
+            package_toolbar.addWidget(button)
+        package_toolbar.addStretch(1)
+        package_card.body_layout.addLayout(package_toolbar)
+        tip = QLabel("建议先把不需要转发的项取消勾选，再把最终要发的内容拖到正确顺序。")
+        tip.setProperty("role", "hint")
+        tip.setWordWrap(True)
+        package_card.body_layout.addWidget(tip)
+        self.package_table = QTableWidget(0, len(self.PACKAGE_COLUMNS))
+        self.package_table.setHorizontalHeaderLabels([title for _, title, _ in self.PACKAGE_COLUMNS])
+        self.package_table.verticalHeader().setVisible(False)
+        self.package_table.horizontalHeader().setStretchLastSection(True)
+        self.package_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.package_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        package_card.body_layout.addWidget(self.package_table)
+        layout.addWidget(package_card)
+
+        route_card = CardFrame("上下游路由")
+        route_toolbar = QHBoxLayout()
+        self.import_routes_button = QPushButton("导入路由表")
+        self.export_route_template_button = QPushButton("导出路由模板")
+        self.export_route_template_button.setProperty("variant", "ghost")
+        self.add_route_button = QPushButton("新增一行")
+        self.remove_route_button = QPushButton("删除选中")
+        self.remove_route_button.setProperty("variant", "secondary")
+        for button in [self.import_routes_button, self.export_route_template_button, self.add_route_button, self.remove_route_button]:
+            route_toolbar.addWidget(button)
+        route_toolbar.addStretch(1)
+        route_card.body_layout.addLayout(route_toolbar)
+        route_tip = QLabel("路由表支持 Excel/CSV 导入。每行一条“上游 -> 下游”的映射。正式发送和验证会自动按当前上游筛选。")
+        route_tip.setProperty("role", "hint")
+        route_tip.setWordWrap(True)
+        route_card.body_layout.addWidget(route_tip)
+        self.route_summary_label = QLabel("还没有导入路由表。")
+        self.route_summary_label.setProperty("role", "muted")
+        self.route_summary_label.setWordWrap(True)
+        route_card.body_layout.addWidget(self.route_summary_label)
+        self.route_table = QTableWidget(0, len(self.ROUTE_COLUMNS))
+        self.route_table.setHorizontalHeaderLabels([title for _, title, _ in self.ROUTE_COLUMNS])
+        self.route_table.verticalHeader().setVisible(False)
+        self.route_table.horizontalHeader().setStretchLastSection(True)
+        self.route_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.route_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        route_card.body_layout.addWidget(self.route_table)
+        route_actions = QHBoxLayout()
+        self.validate_routes_button = QPushButton("验证下游会话")
+        self.test_send_button = QPushButton("测试发送到文件传输助手")
+        self.test_send_button.setProperty("variant", "secondary")
+        self.send_button = QPushButton("正式批量发送")
+        for button in [self.validate_routes_button, self.test_send_button, self.send_button]:
+            route_actions.addWidget(button)
+        route_actions.addStretch(1)
+        route_card.body_layout.addLayout(route_actions)
+        self.result_text = QTextEdit()
+        self.result_text.setReadOnly(True)
+        self.result_text.setPlaceholderText("验证结果、测试发送结果和正式发送结果会显示在这里。")
+        route_card.body_layout.addWidget(self.result_text)
+        layout.addWidget(route_card)
+
+        self.collect_texts_button.clicked.connect(self._request_collect_texts)
+        self.collect_files_button.clicked.connect(self._request_collect_files)
+        self.add_text_button.clicked.connect(self._add_manual_text)
+        self.add_files_button.clicked.connect(self._add_local_files)
+        self.clear_package_button.clicked.connect(self.clear_package_rows)
+        self.move_up_button.clicked.connect(self.move_selected_package_rows_up)
+        self.move_down_button.clicked.connect(self.move_selected_package_rows_down)
+        self.remove_package_button.clicked.connect(self.remove_selected_package_rows)
+        self.import_routes_button.clicked.connect(self.import_route_rows)
+        self.export_route_template_button.clicked.connect(self.export_route_template)
+        self.add_route_button.clicked.connect(self.add_empty_route_row)
+        self.remove_route_button.clicked.connect(self.remove_selected_route_rows)
+        self.validate_routes_button.clicked.connect(self._request_validate_routes)
+        self.test_send_button.clicked.connect(self._request_test_send)
+        self.send_button.clicked.connect(self._request_send)
+        self.source_session_input.textChanged.connect(self.refresh_route_summary)
+
+        self._configure_package_columns()
+        self._configure_route_columns()
+        self.set_running_state(False)
+
+    def _configure_package_columns(self) -> None:
+        widths = {"enabled": 60, "sequence": 70, "item_type": 80, "source_session": 140, "content": 260, "file_path": 280, "collected_at": 140, "remark": 140}
+        for index, (key, _, _) in enumerate(self.PACKAGE_COLUMNS):
+            if key in widths:
+                self.package_table.setColumnWidth(index, widths[key])
+
+    def _configure_route_columns(self) -> None:
+        widths = {"enabled": 60, "upstream_session": 140, "downstream_session": 160, "validation_status": 90, "validation_message": 220, "remark": 120}
+        for index, (key, _, _) in enumerate(self.ROUTE_COLUMNS):
+            if key in widths:
+                self.route_table.setColumnWidth(index, widths[key])
+
+    def _request_collect_texts(self) -> None:
+        request = RelayCollectTextRequest(
+            source_session=self.source_session_input.text().strip(),
+            message_limit=self.message_limit_spin.value(),
+        )
+        errors = request.validate()
+        if errors:
+            QMessageBox.warning(self, "采集文本", next(iter(errors.values())))
+            return
+        self.collect_texts_requested.emit(request)
+
+    def _request_collect_files(self) -> None:
+        request = RelayCollectFilesRequest(
+            source_session=self.source_session_input.text().strip(),
+            file_limit=self.file_limit_spin.value(),
+        )
+        errors = request.validate()
+        if errors:
+            QMessageBox.warning(self, "采集文件", next(iter(errors.values())))
+            return
+        self.collect_files_requested.emit(request)
+
+    def _add_manual_text(self) -> None:
+        text, ok = QInputDialog.getMultiLineText(self, "手动添加文本", "要加入转发包的文本内容")
+        if not ok or not text.strip():
+            return
+        row = RelayPackageRow(
+            sequence=self.package_table.rowCount() + 1,
+            item_type=RelayItemType.TEXT,
+            source_session=self.source_session_input.text().strip(),
+            content=text.strip(),
+            collected_at="手动添加",
+        )
+        self.append_package_rows([row], "已手动加入 1 条文本。")
+
+    def _add_local_files(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(self, "选择本地文件或图片")
+        if not paths:
+            return
+        rows = []
+        for index, path in enumerate(paths, start=1):
+            item_type = RelayItemType.IMAGE if Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff"} else RelayItemType.FILE
+            rows.append(
+                RelayPackageRow(
+                    sequence=self.package_table.rowCount() + index,
+                    item_type=item_type,
+                    source_session=self.source_session_input.text().strip(),
+                    content=Path(path).name,
+                    file_path=path,
+                    collected_at="本地补充",
+                )
+            )
+        self.append_package_rows(rows, f"已补充 {len(rows)} 个本地文件/图片。")
+
+    def append_package_rows(self, rows: list[RelayPackageRow], summary: str = "") -> None:
+        start = self.package_table.rowCount()
+        for offset, row in enumerate(rows):
+            self.package_table.insertRow(start + offset)
+            self._set_table_row(self.package_table, start + offset, self.PACKAGE_COLUMNS, row.__dict__ | {"item_type": row.item_type.value})
+        self._renumber_package_rows()
+        if summary:
+            self.package_summary_label.setText(summary)
+
+    def set_route_rows(self, rows: list[RelayRouteRow], summary: str | None = None) -> None:
+        self.route_table.setRowCount(0)
+        for row_index, row in enumerate(rows):
+            self.route_table.insertRow(row_index)
+            self._set_table_row(self.route_table, row_index, self.ROUTE_COLUMNS, row.__dict__)
+        self.refresh_route_summary(summary)
+
+    def route_rows(self) -> list[RelayRouteRow]:
+        rows: list[RelayRouteRow] = []
+        for row_index in range(self.route_table.rowCount()):
+            mapping = self._row_mapping(self.route_table, row_index, self.ROUTE_COLUMNS)
+            rows.append(RelayRouteRow.from_mapping(mapping))
+        return rows
+
+    def package_rows(self) -> list[RelayPackageRow]:
+        rows: list[RelayPackageRow] = []
+        for row_index in range(self.package_table.rowCount()):
+            mapping = self._row_mapping(self.package_table, row_index, self.PACKAGE_COLUMNS)
+            rows.append(RelayPackageRow.from_mapping(mapping))
+        return rows
+
+    def selected_package_rows(self) -> list[RelayPackageRow]:
+        return [row for row in self.package_rows() if row.enabled]
+
+    def current_validation_request(self) -> RelayValidationRequest:
+        return RelayValidationRequest(
+            source_session=self.source_session_input.text().strip(),
+            route_rows=self.route_rows(),
+        )
+
+    def current_send_request(self, test_only: bool) -> RelaySendRequest:
+        return RelaySendRequest(
+            source_session=self.source_session_input.text().strip(),
+            package_rows=self.package_rows(),
+            route_rows=self.route_rows(),
+            test_only=test_only,
+        )
+
+    def _request_validate_routes(self) -> None:
+        request = self.current_validation_request()
+        errors = request.validate()
+        if errors:
+            QMessageBox.warning(self, "验证下游", next(iter(errors.values())))
+            return
+        self.validate_routes_requested.emit(request)
+
+    def _request_test_send(self) -> None:
+        request = self.current_send_request(test_only=True)
+        errors = request.validate()
+        if errors:
+            QMessageBox.warning(self, "测试发送", next(iter(errors.values())))
+            return
+        self.test_send_requested.emit(request)
+
+    def _request_send(self) -> None:
+        request = self.current_send_request(test_only=False)
+        errors = request.validate()
+        if errors:
+            QMessageBox.warning(self, "正式发送", next(iter(errors.values())))
+            return
+        self.send_requested.emit(request)
+
+    def import_route_rows(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "导入上下游路由表", "", "Excel/CSV (*.xlsx *.csv)")
+        if not path:
+            return
+        rows = load_route_rows(path)
+        self.set_route_rows(rows, f"已导入 {len(rows)} 条路由。")
+
+    def export_route_template(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "导出路由模板", "relay-routes-template.xlsx", "Excel (*.xlsx);;CSV (*.csv)")
+        if not path:
+            return
+        dump_route_rows([], path)
+
+    def add_empty_route_row(self) -> None:
+        row_index = self.route_table.rowCount()
+        self.route_table.insertRow(row_index)
+        self._set_table_row(
+            self.route_table,
+            row_index,
+            self.ROUTE_COLUMNS,
+            {
+                "enabled": True,
+                "upstream_session": self.source_session_input.text().strip(),
+                "downstream_session": "",
+                "validation_status": "未验证",
+                "validation_message": "",
+                "remark": "",
+            },
+        )
+        self.refresh_route_summary()
+
+    def remove_selected_package_rows(self) -> None:
+        self._remove_selected_rows(self.package_table)
+        self._renumber_package_rows()
+        self.refresh_package_summary()
+
+    def remove_selected_route_rows(self) -> None:
+        self._remove_selected_rows(self.route_table)
+        self.refresh_route_summary()
+
+    def move_selected_package_rows_up(self) -> None:
+        self._move_selected_rows(self.package_table, self.PACKAGE_COLUMNS, direction=-1)
+        self._renumber_package_rows()
+
+    def move_selected_package_rows_down(self) -> None:
+        self._move_selected_rows(self.package_table, self.PACKAGE_COLUMNS, direction=1)
+        self._renumber_package_rows()
+
+    def clear_package_rows(self) -> None:
+        self.package_table.setRowCount(0)
+        self.refresh_package_summary("转发包已清空。")
+
+    def apply_validation_result(self, rows: list[RelayRouteRow], summary: str) -> None:
+        self.set_route_rows(rows, summary)
+        self.result_text.setPlainText(summary)
+
+    def apply_send_result(self, text: str) -> None:
+        self.result_text.setPlainText(text)
+
+    def refresh_package_summary(self, override: str | None = None) -> None:
+        if override:
+            self.package_summary_label.setText(override)
+            return
+        rows = self.package_rows()
+        enabled_rows = [row for row in rows if row.enabled]
+        self.package_summary_label.setText(f"当前转发包共有 {len(rows)} 条内容，其中 {len(enabled_rows)} 条已勾选待发送。")
+
+    def refresh_route_summary(self, override: str | None = None) -> None:
+        if override:
+            self.route_summary_label.setText(override)
+            return
+        source_session = self.source_session_input.text().strip()
+        rows = self.route_rows()
+        matched = [row for row in rows if row.upstream_session == source_session]
+        if not rows:
+            self.route_summary_label.setText("还没有导入路由表。")
+            return
+        if not source_session:
+            self.route_summary_label.setText(f"已导入 {len(rows)} 条路由。填写上游会话后会自动筛选匹配的下游。")
+            return
+        self.route_summary_label.setText(f"当前上游“{source_session}”匹配到 {len(matched)} 条下游路由。")
+
+    def set_running_state(self, is_running: bool) -> None:
+        self._running = is_running
+        for widget in [
+            self.source_session_input,
+            self.package_name_input,
+            self.message_limit_spin,
+            self.file_limit_spin,
+            self.collect_texts_button,
+            self.collect_files_button,
+            self.add_text_button,
+            self.add_files_button,
+            self.clear_package_button,
+            self.move_up_button,
+            self.move_down_button,
+            self.remove_package_button,
+            self.import_routes_button,
+            self.export_route_template_button,
+            self.add_route_button,
+            self.remove_route_button,
+            self.validate_routes_button,
+            self.test_send_button,
+            self.send_button,
+        ]:
+            widget.setEnabled(not is_running)
+
+    def _set_table_row(self, table: QTableWidget, row_index: int, columns: list[tuple[str, str, str]], values: dict[str, Any]) -> None:
+        for column_index, (key, _, kind) in enumerate(columns):
+            item = QTableWidgetItem()
+            value = values.get(key, "")
+            if kind == "bool":
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                item.setCheckState(Qt.CheckState.Checked if bool(value) else Qt.CheckState.Unchecked)
+                item.setText("")
+            else:
+                item.setText("" if value is None else str(value))
+            table.setItem(row_index, column_index, item)
+
+    def _row_mapping(self, table: QTableWidget, row_index: int, columns: list[tuple[str, str, str]]) -> dict[str, Any]:
+        mapping: dict[str, Any] = {}
+        for column_index, (key, _, kind) in enumerate(columns):
+            item = table.item(row_index, column_index)
+            if kind == "bool":
+                mapping[key] = item.checkState() == Qt.CheckState.Checked if item else False
+            else:
+                mapping[key] = item.text().strip() if item else ""
+        return mapping
+
+    @staticmethod
+    def _remove_selected_rows(table: QTableWidget) -> None:
+        rows = sorted({item.row() for item in table.selectedItems()}, reverse=True)
+        for row_index in rows:
+            table.removeRow(row_index)
+
+    def _renumber_package_rows(self) -> None:
+        for row_index in range(self.package_table.rowCount()):
+            sequence_item = self.package_table.item(row_index, 1)
+            if sequence_item is not None:
+                sequence_item.setText(str(row_index + 1))
+        self.refresh_package_summary()
+
+    def _move_selected_rows(self, table: QTableWidget, columns: list[tuple[str, str, str]], direction: int) -> None:
+        rows = sorted({item.row() for item in table.selectedItems()})
+        if not rows:
+            return
+        if direction > 0:
+            rows = list(reversed(rows))
+        for row_index in rows:
+            new_index = row_index + direction
+            if new_index < 0 or new_index >= table.rowCount():
+                continue
+            current = self._row_mapping(table, row_index, columns)
+            target = self._row_mapping(table, new_index, columns)
+            self._set_table_row(table, row_index, columns, target)
+            self._set_table_row(table, new_index, columns, current)
+            table.selectRow(new_index)
 
 
 class TemplatesPage(QWidget):

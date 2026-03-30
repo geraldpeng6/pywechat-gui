@@ -397,6 +397,183 @@ class GroupScanResult:
     rows: list[GroupSummaryRow] = field(default_factory=list)
 
 
+class RelayItemType(str, Enum):
+    TEXT = "text"
+    FILE = "file"
+    IMAGE = "image"
+
+
+@dataclass
+class RelayPackageRow:
+    enabled: bool = True
+    sequence: int = 1
+    item_type: RelayItemType = RelayItemType.TEXT
+    source_session: str = ""
+    content: str = ""
+    file_path: str = ""
+    collected_at: str = ""
+    remark: str = ""
+
+    @classmethod
+    def from_mapping(cls, mapping: dict[str, Any]) -> "RelayPackageRow":
+        item_type = str(mapping.get("item_type", RelayItemType.TEXT.value) or RelayItemType.TEXT.value).strip().lower()
+        if item_type not in {member.value for member in RelayItemType}:
+            item_type = RelayItemType.TEXT.value
+        sequence = mapping.get("sequence", 1)
+        try:
+            sequence_value = int(sequence)
+        except (TypeError, ValueError):
+            sequence_value = 1
+        return cls(
+            enabled=_parse_bool(mapping.get("enabled"), True),
+            sequence=max(1, sequence_value),
+            item_type=RelayItemType(item_type),
+            source_session=_normalize_text(mapping.get("source_session")),
+            content=_normalize_text(mapping.get("content")),
+            file_path=_normalize_text(mapping.get("file_path")),
+            collected_at=_normalize_text(mapping.get("collected_at")),
+            remark=_normalize_text(mapping.get("remark")),
+        )
+
+    def validate(self) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        if self.item_type is RelayItemType.TEXT:
+            if not self.content:
+                errors["content"] = "文本项不能为空"
+        else:
+            if not self.file_path:
+                errors["file_path"] = "文件或图片路径不能为空"
+            elif not Path(self.file_path).is_file():
+                errors["file_path"] = "文件或图片路径不存在"
+        return errors
+
+    def preview_text(self) -> str:
+        if self.item_type is RelayItemType.TEXT:
+            return self.content
+        if self.file_path:
+            return Path(self.file_path).name
+        return self.content
+
+
+@dataclass
+class RelayRouteRow:
+    enabled: bool = True
+    upstream_session: str = ""
+    downstream_session: str = ""
+    validation_status: str = "未验证"
+    validation_message: str = ""
+    remark: str = ""
+
+    @classmethod
+    def from_mapping(cls, mapping: dict[str, Any]) -> "RelayRouteRow":
+        return cls(
+            enabled=_parse_bool(mapping.get("enabled"), True),
+            upstream_session=_normalize_text(mapping.get("upstream_session")),
+            downstream_session=_normalize_text(mapping.get("downstream_session")),
+            validation_status=_normalize_text(mapping.get("validation_status")) or "未验证",
+            validation_message=_normalize_text(mapping.get("validation_message")),
+            remark=_normalize_text(mapping.get("remark")),
+        )
+
+    def validate(self) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        if not self.upstream_session:
+            errors["upstream_session"] = "上游会话不能为空"
+        if not self.downstream_session:
+            errors["downstream_session"] = "下游会话不能为空"
+        return errors
+
+
+@dataclass
+class RelayCollectTextRequest:
+    source_session: str
+    message_limit: int = 20
+
+    def validate(self) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        if not self.source_session.strip():
+            errors["source_session"] = "请先填写上游会话"
+        if self.message_limit <= 0:
+            errors["message_limit"] = "消息条数必须大于 0"
+        return errors
+
+
+@dataclass
+class RelayCollectFilesRequest:
+    source_session: str
+    file_limit: int = 10
+
+    def validate(self) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        if not self.source_session.strip():
+            errors["source_session"] = "请先填写上游会话"
+        if self.file_limit <= 0:
+            errors["file_limit"] = "文件数量必须大于 0"
+        return errors
+
+
+@dataclass
+class RelayCollectionResult:
+    source_session: str
+    rows: list[RelayPackageRow] = field(default_factory=list)
+    warning: str = ""
+
+
+@dataclass
+class RelayValidationRequest:
+    source_session: str
+    route_rows: list[RelayRouteRow] = field(default_factory=list)
+
+    def validate(self) -> dict[str, str]:
+        if not self.source_session.strip():
+            return {"source_session": "请先填写当前上游会话"}
+        return {}
+
+
+@dataclass
+class RelayValidationResult:
+    source_session: str
+    route_rows: list[RelayRouteRow] = field(default_factory=list)
+    checked_count: int = 0
+    found_count: int = 0
+    missing_count: int = 0
+
+
+@dataclass
+class RelaySendRequest:
+    source_session: str
+    package_rows: list[RelayPackageRow] = field(default_factory=list)
+    route_rows: list[RelayRouteRow] = field(default_factory=list)
+    test_only: bool = False
+
+    def validate(self) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        if not self.package_rows:
+            errors["package_rows"] = "请先准备至少一条转发内容"
+        if not self.test_only and not self.source_session.strip():
+            errors["source_session"] = "正式发送前请先填写上游会话"
+        return errors
+
+
+@dataclass
+class RelayTargetResult:
+    target_session: str
+    success: bool
+    sent_count: int
+    error_message: str = ""
+
+
+@dataclass
+class RelaySendResult:
+    source_session: str
+    test_only: bool
+    item_count: int
+    target_count: int
+    success_count: int
+    failure_count: int
+    results: list[RelayTargetResult] = field(default_factory=list)
+
+
 def dataclass_to_json(items: list[MessageBatchRow] | list[FileBatchRow]) -> str:
     return json.dumps([asdict(item) for item in items], ensure_ascii=False)
 
