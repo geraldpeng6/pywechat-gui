@@ -148,7 +148,7 @@ class MainWindow(QMainWindow):
         self.dashboard_page.refresh_requested.connect(self.refresh_environment)
         self.dashboard_page.open_message_requested.connect(lambda: self.nav.setCurrentRow(1))
         self.dashboard_page.open_file_requested.connect(lambda: self.nav.setCurrentRow(2))
-        self.dashboard_page.open_templates_requested.connect(lambda: self.nav.setCurrentRow(4))
+        self.dashboard_page.open_templates_requested.connect(lambda: self.nav.setCurrentRow(5))
         self.message_page.run_requested.connect(lambda rows, src: self.start_batch(TaskType.MESSAGE, rows, src))
         self.file_page.run_requested.connect(lambda rows, src: self.start_batch(TaskType.FILE, rows, src))
         self.message_page.stop_requested.connect(self.stop_batch)
@@ -342,7 +342,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("模板已保存，下次可以在模板中心直接加载。", 4000)
 
     def open_templates_for(self, task_type: TaskType) -> None:
-        self.nav.setCurrentRow(4)
+        self.nav.setCurrentRow(5)
         table = self.templates_page.table
         for row_index in range(table.rowCount()):
             if table.item(row_index, 2).text() == ("批量消息" if task_type is TaskType.MESSAGE else "批量文件"):
@@ -838,10 +838,14 @@ class MainWindow(QMainWindow):
             self.history_page.retry_button,
             self.history_page.export_failed_button,
             self.history_page.clear_button,
+            self.export_history_page.open_folder_button,
+            self.export_history_page.open_summary_button,
+            self.export_history_page.clear_button,
             self.settings_page.save_button,
         ]:
             button.setEnabled(not is_running)
         self.history_page.failed_only_checkbox.setEnabled(not is_running)
+        self.export_history_page.search_input.setEnabled(not is_running)
         if not is_running:
             self._update_history_action_state()
 
