@@ -3,11 +3,23 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from .adapter import PyWeixinAdapter
-from .logging_utils import configure_logging
-from .paths import ensure_app_dirs
-from .settings_manager import SettingsManager
-from .storage import AppStorage
+if __package__ in {None, ""}:
+    workspace_root = Path(__file__).resolve().parent.parent
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+
+try:
+    from .adapter import PyWeixinAdapter
+    from .logging_utils import configure_logging
+    from .paths import ensure_app_dirs
+    from .settings_manager import SettingsManager
+    from .storage import AppStorage
+except ImportError:
+    from pyweixin_gui.adapter import PyWeixinAdapter
+    from pyweixin_gui.logging_utils import configure_logging
+    from pyweixin_gui.paths import ensure_app_dirs
+    from pyweixin_gui.settings_manager import SettingsManager
+    from pyweixin_gui.storage import AppStorage
 
 
 def main() -> int:
@@ -19,8 +31,12 @@ def main() -> int:
         print(exc)
         return 1
 
-    from .ui.main_window import MainWindow
-    from .ui.styles import LIGHT_STYLESHEET
+    try:
+        from .ui.main_window import MainWindow
+        from .ui.styles import LIGHT_STYLESHEET
+    except ImportError:
+        from pyweixin_gui.ui.main_window import MainWindow
+        from pyweixin_gui.ui.styles import LIGHT_STYLESHEET
 
     dirs = ensure_app_dirs()
     logger = configure_logging(dirs["logs_dir"])
