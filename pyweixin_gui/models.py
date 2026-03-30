@@ -275,6 +275,31 @@ class ChatExportRequest:
 
 
 @dataclass
+class ChatBatchExportRequest:
+    session_names: list[str]
+    target_folder: str
+    export_messages: bool = True
+    export_files: bool = True
+    export_images: bool = False
+    message_limit: int = 100
+    file_limit: int = 50
+
+    def validate(self) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        if not [name.strip() for name in self.session_names if name.strip()]:
+            errors["session_names"] = "请至少填写一个会话名称"
+        if not self.target_folder.strip():
+            errors["target_folder"] = "请选择导出文件夹"
+        if not self.export_messages and not self.export_files:
+            errors["export_scope"] = "请至少勾选一种导出内容"
+        if self.message_limit <= 0:
+            errors["message_limit"] = "消息条数必须大于 0"
+        if self.file_limit <= 0:
+            errors["file_limit"] = "文件数量必须大于 0"
+        return errors
+
+
+@dataclass
 class ChatExportResult:
     session_name: str
     export_folder: str
@@ -286,6 +311,17 @@ class ChatExportResult:
     summary_json: str | None = None
     summary_txt: str | None = None
     warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ChatBatchExportResult:
+    export_root: str
+    total_sessions: int
+    success_count: int
+    failure_count: int
+    session_results: list[ChatExportResult] = field(default_factory=list)
+    failed_sessions: list[dict[str, str]] = field(default_factory=list)
+    summary_txt: str | None = None
 
 
 class ResourceExportKind(str, Enum):
@@ -319,6 +355,18 @@ class ResourceExportResult:
     exported_count: int
     exported_paths: list[str] = field(default_factory=list)
     summary_txt: str | None = None
+
+
+@dataclass
+class ExportHistoryRecord:
+    export_kind: str
+    title: str
+    export_folder: str
+    exported_count: int
+    summary_path: str | None = None
+    detail_json: str = "{}"
+    id: int | None = None
+    created_at: str | None = None
 
 
 def dataclass_to_json(items: list[MessageBatchRow] | list[FileBatchRow]) -> str:

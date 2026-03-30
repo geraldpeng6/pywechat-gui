@@ -4,7 +4,7 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-from .models import ExecutionRecord, ExecutionRowResult, TaskTemplate, TaskType
+from .models import ExecutionRecord, ExecutionRowResult, ExportHistoryRecord, TaskTemplate, TaskType
 
 
 class AppStorage:
@@ -59,6 +59,16 @@ class AppStorage:
                     raw_error TEXT,
                     row_payload_json TEXT NOT NULL,
                     FOREIGN KEY(execution_id) REFERENCES executions(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS export_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    export_kind TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    export_folder TEXT NOT NULL,
+                    exported_count INTEGER NOT NULL,
+                    summary_path TEXT,
+                    detail_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 """
             )
@@ -208,6 +218,58 @@ class AppStorage:
             conn.execute("DELETE FROM execution_rows")
             conn.execute("DELETE FROM executions")
 
+    def save_export_record(self, record: ExportHistoryRecord) -> ExportHistoryRecord:
+        with self.connect() as conn:
+            if record.id is None:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO export_records
+                    (export_kind, title, export_folder, exported_count, summary_path, detail_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record.export_kind,
+                        record.title,
+                        record.export_folder,
+                        record.exported_count,
+                        record.summary_path,
+                        record.detail_json,
+                    ),
+                )
+                record_id = int(cursor.lastrowid)
+            else:
+                conn.execute(
+                    """
+                    UPDATE export_records
+                    SET export_kind=?, title=?, export_folder=?, exported_count=?, summary_path=?, detail_json=?
+                    WHERE id=?
+                    """,
+                    (
+                        record.export_kind,
+                        record.title,
+                        record.export_folder,
+                        record.exported_count,
+                        record.summary_path,
+                        record.detail_json,
+                        record.id,
+                    ),
+                )
+                record_id = record.id
+            row = conn.execute("SELECT * FROM export_records WHERE id=?", (record_id,)).fetchone()
+        return self._row_to_export_record(row)
+
+    def list_export_records(self, limit: int = 200) -> list[ExportHistoryRecord]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM export_records ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [self._row_to_export_record(row) for row in rows]
+
+    def clear_export_history(self) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM export_records")
+
     @staticmethod
     def _row_to_template(row: sqlite3.Row) -> TaskTemplate:
         return TaskTemplate(
@@ -244,4 +306,17 @@ class AppStorage:
             error_message=row["error_message"],
             raw_error=row["raw_error"],
             row_payload_json=row["row_payload_json"],
+        )
+
+    @staticmethod
+    def _row_to_export_record(row: sqlite3.Row) -> ExportHistoryRecord:
+        return ExportHistoryRecord(
+            id=row["id"],
+            export_kind=row["export_kind"],
+            title=row["title"],
+            export_folder=row["export_folder"],
+            exported_count=row["exported_count"],
+            summary_path=row["summary_path"],
+            detail_json=row["detail_json"],
+            created_at=row["created_at"],
         )

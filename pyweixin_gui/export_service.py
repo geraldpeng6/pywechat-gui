@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from .adapter import PyWeixinAdapter
-from .models import ChatExportRequest, ChatExportResult, RuntimeOptions
+from .models import ChatBatchExportRequest, ChatBatchExportResult, ChatExportRequest, ChatExportResult, RuntimeOptions
 
 
 ProgressCallback = Callable[[str], None]
@@ -96,6 +96,59 @@ class ChatExportService:
         result.summary_txt = str(summary_txt)
         return result
 
+    def export_chat_batch(
+        self,
+        request: ChatBatchExportRequest,
+        runtime_options: RuntimeOptions,
+        on_progress: ProgressCallback | None = None,
+        should_stop: StopCallback | None = None,
+    ) -> ChatBatchExportResult:
+        target_root = Path(request.target_folder).expanduser().resolve()
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        batch_root = target_root / f"batch-export-{timestamp}"
+        batch_root.mkdir(parents=True, exist_ok=True)
+
+        session_results: list[ChatExportResult] = []
+        failed_sessions: list[dict[str, str]] = []
+        session_names = [name.strip() for name in request.session_names if name.strip()]
+
+        for session_name in session_names:
+            self._check_stop(should_stop)
+            if on_progress:
+                on_progress(f"正在导出会话：{session_name}")
+            try:
+                single_request = ChatExportRequest(
+                    session_name=session_name,
+                    target_folder=str(batch_root),
+                    export_messages=request.export_messages,
+                    export_files=request.export_files,
+                    export_images=request.export_images,
+                    message_limit=request.message_limit,
+                    file_limit=request.file_limit,
+                )
+                result = self.export_chat_bundle(
+                    request=single_request,
+                    runtime_options=runtime_options,
+                    on_progress=None,
+                    should_stop=should_stop,
+                )
+                session_results.append(result)
+            except Exception as exc:
+                failed_sessions.append({"session_name": session_name, "error": str(exc)})
+
+        summary = ChatBatchExportResult(
+            export_root=str(batch_root),
+            total_sessions=len(session_names),
+            success_count=len(session_results),
+            failure_count=len(failed_sessions),
+            session_results=session_results,
+            failed_sessions=failed_sessions,
+        )
+        summary_path = batch_root / "batch-export-summary.txt"
+        summary_path.write_text(self._build_batch_summary(summary), encoding="utf-8")
+        summary.summary_txt = str(summary_path)
+        return summary
+
     @staticmethod
     def _write_messages_csv(path: Path, messages: list[str], timestamps: list[str]) -> None:
         with path.open("w", encoding="utf-8-sig", newline="") as handle:
@@ -127,6 +180,22 @@ class ChatExportService:
         if result.warnings:
             lines.append("注意事项：")
             lines.extend(f"- {warning}" for warning in result.warnings)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_batch_summary(result: ChatBatchExportResult) -> str:
+        lines = [
+            f"批量导出目录：{result.export_root}",
+            f"会话总数：{result.total_sessions}",
+            f"成功数量：{result.success_count}",
+            f"失败数量：{result.failure_count}",
+        ]
+        if result.session_results:
+            lines.append("成功会话：")
+            lines.extend(f"- {item.session_name}: {item.export_folder}" for item in result.session_results)
+        if result.failed_sessions:
+            lines.append("失败会话：")
+            lines.extend(f"- {item['session_name']}: {item['error']}" for item in result.failed_sessions)
         return "\n".join(lines)
 
     @staticmethod

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 from PySide6.QtCore import QThread, Qt
@@ -32,14 +33,15 @@ from ..executor import BatchExecutor, failed_rows_from_execution
 from ..export_service import ChatExportService
 from ..export_worker import ChatExportWorker
 from ..import_export import dump_rows
-from ..models import AppSettings, ChatExportRequest, ChatExportResult, FileBatchRow, MessageBatchRow, ResourceExportRequest, ResourceExportResult, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json
+from ..models import AppSettings, ChatBatchExportRequest, ChatBatchExportResult, ChatExportRequest, ChatExportResult, ExportHistoryRecord, FileBatchRow, MessageBatchRow, ResourceExportRequest, ResourceExportResult, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json
 from ..presentation import execution_metrics, filter_executions, filter_templates, summarize_failures, template_metrics, template_type_label
 from ..resource_export_service import ResourceExportService, export_kind_label
 from ..resource_export_worker import ResourceExportWorker
 from ..settings_manager import SettingsManager
 from ..storage import AppStorage
+from ..system_ops import open_path
 from ..worker import BatchWorker
-from .widgets import BatchPage, DashboardPage, ExportPage, HistoryPage, ResourceToolsPage, SettingsPage, TemplatesPage
+from .widgets import BatchPage, DashboardPage, ExportHistoryPage, ExportPage, HistoryPage, ResourceToolsPage, SettingsPage, TemplatesPage
 
 
 class MainWindow(QMainWindow):
@@ -64,6 +66,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self._template_cache: list[TaskTemplate] = []
         self._execution_cache = []
+        self._export_history_cache: list[ExportHistoryRecord] = []
         self._last_deleted_template: TaskTemplate | None = None
 
         self.setWindowTitle("PyWeChat GUI 工作台")
@@ -97,6 +100,7 @@ class MainWindow(QMainWindow):
         self.resource_page = ResourceToolsPage()
         self.templates_page = TemplatesPage()
         self.history_page = HistoryPage()
+        self.export_history_page = ExportHistoryPage()
         self.settings_page = SettingsPage()
 
         self._add_page("首页", self.dashboard_page)
@@ -106,6 +110,7 @@ class MainWindow(QMainWindow):
         self._add_page("资源导出", self.resource_page)
         self._add_page("模板中心", self.templates_page)
         self._add_page("执行历史", self.history_page)
+        self._add_page("导出历史", self.export_history_page)
         self._add_page("设置", self.settings_page)
         self.nav.setCurrentRow(0)
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
@@ -115,6 +120,7 @@ class MainWindow(QMainWindow):
         self.refresh_environment()
         self.refresh_templates()
         self.refresh_history()
+        self.refresh_export_history()
         self._show_welcome_if_needed()
         self._set_running_state(False)
 
@@ -148,9 +154,12 @@ class MainWindow(QMainWindow):
         self.message_page.stop_requested.connect(self.stop_batch)
         self.file_page.stop_requested.connect(self.stop_batch)
         self.export_page.export_requested.connect(self.start_export)
+        self.export_page.batch_export_requested.connect(self.start_batch_export)
         self.export_page.stop_requested.connect(self.stop_batch)
         self.resource_page.export_requested.connect(self.start_resource_export)
         self.resource_page.stop_requested.connect(self.stop_batch)
+        self.export_page.open_folder_button.clicked.connect(lambda: self._open_export_page_folder(self.export_page))
+        self.resource_page.open_folder_button.clicked.connect(lambda: self._open_export_page_folder(self.resource_page))
         self.message_page.save_template_requested.connect(self.save_template)
         self.file_page.save_template_requested.connect(self.save_template)
         self.message_page.open_templates_requested.connect(self.open_templates_for)
@@ -179,6 +188,12 @@ class MainWindow(QMainWindow):
         self.history_page.detail_table.itemSelectionChanged.connect(self.show_selected_row_diagnostic)
         self.history_page.copy_diag_button.clicked.connect(self.copy_selected_row_diagnostic)
         self.history_page.retry_button.clicked.connect(self.retry_selected_execution_failures)
+
+        self.export_history_page.search_input.textChanged.connect(self.apply_export_history_filter)
+        self.export_history_page.table.itemSelectionChanged.connect(self.show_export_history_detail)
+        self.export_history_page.open_folder_button.clicked.connect(self.open_selected_export_folder)
+        self.export_history_page.open_summary_button.clicked.connect(self.open_selected_export_summary)
+        self.export_history_page.clear_button.clicked.connect(self.clear_export_history)
 
         self.settings_page.save_button.clicked.connect(self.save_settings)
 
@@ -235,6 +250,10 @@ class MainWindow(QMainWindow):
     def refresh_history(self) -> None:
         self._execution_cache = self.storage.list_executions()
         self.apply_history_filter()
+
+    def refresh_export_history(self) -> None:
+        self._export_history_cache = self.storage.list_export_records()
+        self.apply_export_history_filter()
 
     def apply_history_filter(self) -> None:
         query = self.history_page.search_input.text().strip().lower()
@@ -474,8 +493,42 @@ class MainWindow(QMainWindow):
         self.worker_thread.start()
         self._set_running_state(True)
         self.export_page.result_text.clear()
+        self.export_page.open_folder_button.setEnabled(False)
         self.export_page.summary_label.setText("导出任务已开始，请勿手动操作微信。")
         self.status_bar.showMessage("导出任务已开始，请等待完成。", 5000)
+
+    def start_batch_export(self, request: ChatBatchExportRequest) -> None:
+        if self.worker_thread is not None:
+            QMessageBox.warning(self, "任务进行中", "当前已有任务在执行，请等待完成或先停止。")
+            return
+        environment = self.adapter.inspect_environment()
+        if environment.login_status != "已登录":
+            self.nav.setCurrentRow(0)
+            self._show_guidance_dialog(
+                title="暂时不能执行导出",
+                message=environment.status_message,
+                suggestion="\n".join(environment.advice) if environment.advice else "请先解决首页提示的问题，再回来导出。",
+            )
+            return
+        self.worker_thread = QThread(self)
+        self.worker = ChatExportWorker(self.export_service, request, self.settings.runtime_options())
+        self.worker.moveToThread(self.worker_thread)
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker.progress.connect(self._handle_export_progress)
+        self.worker.finished.connect(self._handle_export_finished)
+        self.worker.failed.connect(self._handle_worker_failure)
+        self.worker.finished.connect(self.worker_thread.quit)
+        self.worker.failed.connect(self.worker_thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.failed.connect(self.worker.deleteLater)
+        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+        self.worker_thread.finished.connect(self._cleanup_worker)
+        self.worker_thread.start()
+        self._set_running_state(True)
+        self.export_page.result_text.clear()
+        self.export_page.open_folder_button.setEnabled(False)
+        self.export_page.summary_label.setText("批量会话导出已开始，请等待完成。")
+        self.status_bar.showMessage("批量会话导出已开始。", 5000)
 
     def start_resource_export(self, request: ResourceExportRequest) -> None:
         if self.worker_thread is not None:
@@ -506,6 +559,7 @@ class MainWindow(QMainWindow):
         self.worker_thread.start()
         self._set_running_state(True)
         self.resource_page.result_text.clear()
+        self.resource_page.open_folder_button.setEnabled(False)
         self.resource_page.summary_label.setText("资源导出已开始，请等待完成。")
         self.status_bar.showMessage("资源导出已开始，请等待完成。", 5000)
 
@@ -549,7 +603,44 @@ class MainWindow(QMainWindow):
         self.export_page.summary_label.setText(message)
         self.status_bar.showMessage(message, 3000)
 
-    def _handle_export_finished(self, result: ChatExportResult) -> None:
+    def _handle_export_finished(self, result: ChatExportResult | ChatBatchExportResult) -> None:
+        if isinstance(result, ChatBatchExportResult):
+            lines = [
+                f"批量导出目录：{result.export_root}",
+                f"会话总数：{result.total_sessions}",
+                f"成功数量：{result.success_count}",
+                f"失败数量：{result.failure_count}",
+            ]
+            if result.summary_txt:
+                lines.append(f"摘要文件：{result.summary_txt}")
+            if result.failed_sessions:
+                lines.append("")
+                lines.append("失败会话：")
+                lines.extend(f"- {item['session_name']}: {item['error']}" for item in result.failed_sessions[:10])
+            self.export_page.result_text.setPlainText("\n".join(lines))
+            self.export_page.summary_label.setText("批量导出完成。你可以直接打开导出目录查看结果。")
+            self.export_page.open_folder_button.setEnabled(True)
+            self.export_page.open_folder_button.setProperty("export_path", result.export_root)
+            self._save_export_record(
+                export_kind="chat_batch",
+                title=f"批量会话导出 ({result.total_sessions} 个)",
+                export_folder=result.export_root,
+                exported_count=result.success_count,
+                summary_path=result.summary_txt,
+                detail_json=json.dumps(
+                    {
+                        "type": "chat_batch",
+                        "success_count": result.success_count,
+                        "failure_count": result.failure_count,
+                        "failed_sessions": result.failed_sessions,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+            self.status_bar.showMessage("批量会话导出完成。", 5000)
+            QMessageBox.information(self, "导出完成", f"已完成批量会话导出。\n目录：{result.export_root}")
+            return
+
         lines = [
             f"会话名称：{result.session_name}",
             f"导出目录：{result.export_folder}",
@@ -568,6 +659,25 @@ class MainWindow(QMainWindow):
             lines.extend(f"- {warning}" for warning in result.warnings)
         self.export_page.result_text.setPlainText("\n".join(lines))
         self.export_page.summary_label.setText("导出完成。你可以直接打开导出目录查看结果。")
+        self.export_page.open_folder_button.setEnabled(True)
+        self.export_page.open_folder_button.setProperty("export_path", result.export_folder)
+        self._save_export_record(
+            export_kind="chat",
+            title=result.session_name,
+            export_folder=result.export_folder,
+            exported_count=result.message_count + result.file_count,
+            summary_path=result.summary_txt,
+            detail_json=json.dumps(
+                {
+                    "type": "chat",
+                    "messages_csv": result.messages_csv,
+                    "messages_json": result.messages_json,
+                    "files_folder": result.files_folder,
+                    "warnings": result.warnings,
+                },
+                ensure_ascii=False,
+            ),
+        )
         self.status_bar.showMessage("会话导出完成。", 5000)
         QMessageBox.information(self, "导出完成", f"已完成会话导出。\n目录：{result.export_folder}")
 
@@ -591,6 +701,23 @@ class MainWindow(QMainWindow):
                 lines.append(f"- ... 共 {len(result.exported_paths)} 项")
         self.resource_page.result_text.setPlainText("\n".join(lines))
         self.resource_page.summary_label.setText("资源导出完成。你可以直接打开导出目录查看结果。")
+        self.resource_page.open_folder_button.setEnabled(True)
+        self.resource_page.open_folder_button.setProperty("export_path", result.target_folder)
+        self._save_export_record(
+            export_kind=result.export_kind.value,
+            title=export_kind_label(result.export_kind),
+            export_folder=result.target_folder,
+            exported_count=result.exported_count,
+            summary_path=result.summary_txt,
+            detail_json=json.dumps(
+                {
+                    "type": "resource",
+                    "export_kind": result.export_kind.value,
+                    "exported_paths": result.exported_paths[:20],
+                },
+                ensure_ascii=False,
+            ),
+        )
         self.status_bar.showMessage("资源导出完成。", 5000)
         QMessageBox.information(self, "导出完成", f"已完成资源导出。\n目录：{result.target_folder}")
 
@@ -717,6 +844,118 @@ class MainWindow(QMainWindow):
         self.history_page.failed_only_checkbox.setEnabled(not is_running)
         if not is_running:
             self._update_history_action_state()
+
+    def apply_export_history_filter(self) -> None:
+        query = self.export_history_page.search_input.text().strip().lower()
+        records = self._export_history_cache
+        table = self.export_history_page.table
+        table.setRowCount(0)
+        filtered = []
+        for record in records:
+            haystack = " ".join([record.export_kind, record.title, record.export_folder, record.created_at or ""]).lower()
+            if query and query not in haystack:
+                continue
+            filtered.append(record)
+        for row_index, record in enumerate(filtered):
+            table.insertRow(row_index)
+            values = [str(record.id), record.export_kind, record.title, str(record.exported_count), record.created_at or ""]
+            for column_index, value in enumerate(values):
+                table.setItem(row_index, column_index, QTableWidgetItem(value))
+        table.resizeColumnsToContents()
+        self.export_history_page.summary_label.setText(
+            f"当前显示 {len(filtered)} / {len(records)} 条导出记录。选中后可打开目录或摘要。"
+            if records
+            else "还没有导出历史。完成一次会话导出或资源导出后，这里会自动记录。"
+        )
+        self.export_history_page.open_folder_button.setEnabled(False)
+        self.export_history_page.open_summary_button.setEnabled(False)
+        self.export_history_page.detail_text.clear()
+
+    def show_export_history_detail(self) -> None:
+        selected = self.export_history_page.table.selectedItems()
+        if not selected:
+            self.export_history_page.detail_text.clear()
+            self.export_history_page.open_folder_button.setEnabled(False)
+            self.export_history_page.open_summary_button.setEnabled(False)
+            return
+        record_id = int(self.export_history_page.table.item(selected[0].row(), 0).text())
+        record = next((item for item in self._export_history_cache if item.id == record_id), None)
+        if record is None:
+            return
+        details = [
+            f"导出类型：{record.export_kind}",
+            f"标题：{record.title}",
+            f"导出目录：{record.export_folder}",
+            f"导出数量：{record.exported_count}",
+            f"摘要文件：{record.summary_path or '无'}",
+            "",
+            "详细信息：",
+            record.detail_json,
+        ]
+        self.export_history_page.detail_text.setPlainText("\n".join(details))
+        self.export_history_page.open_folder_button.setEnabled(True)
+        self.export_history_page.open_folder_button.setProperty("export_path", record.export_folder)
+        self.export_history_page.open_summary_button.setEnabled(bool(record.summary_path))
+        self.export_history_page.open_summary_button.setProperty("export_path", record.summary_path or "")
+
+    def open_selected_export_folder(self) -> None:
+        path = self.export_history_page.open_folder_button.property("export_path")
+        if not path:
+            QMessageBox.information(self, "导出历史", "当前没有可打开的导出目录。")
+            return
+        try:
+            open_path(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "打开导出目录", str(exc))
+
+    def open_selected_export_summary(self) -> None:
+        path = self.export_history_page.open_summary_button.property("export_path")
+        if not path:
+            QMessageBox.information(self, "导出历史", "当前没有可打开的摘要文件。")
+            return
+        try:
+            open_path(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "打开摘要文件", str(exc))
+
+    def clear_export_history(self) -> None:
+        answer = QMessageBox.question(self, "清理导出历史", "确定清理全部导出历史吗？不会删除磁盘上的真实导出文件。")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.storage.clear_export_history()
+        self.refresh_export_history()
+        self.status_bar.showMessage("导出历史已清理。", 4000)
+
+    def _save_export_record(
+        self,
+        export_kind: str,
+        title: str,
+        export_folder: str,
+        exported_count: int,
+        summary_path: str | None,
+        detail_json: str,
+    ) -> None:
+        self.storage.save_export_record(
+            ExportHistoryRecord(
+                export_kind=export_kind,
+                title=title,
+                export_folder=export_folder,
+                exported_count=exported_count,
+                summary_path=summary_path,
+                detail_json=detail_json,
+            )
+        )
+        self.refresh_export_history()
+
+    def _open_export_page_folder(self, page) -> None:
+        path = page.open_folder_button.property("export_path")
+        if not path:
+            QMessageBox.information(self, "打开导出目录", "当前没有可打开的导出目录。")
+            return
+        try:
+            open_path(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "打开导出目录", str(exc))
 
     def _update_history_action_state(self) -> None:
         selected_execution = self._selected_execution_id()

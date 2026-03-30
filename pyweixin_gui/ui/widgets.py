@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..import_export import dump_rows, load_rows
-from ..models import ChatExportRequest, FileBatchRow, MessageBatchRow, ResourceExportKind, ResourceExportRequest, TaskType, clone_row
+from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, MessageBatchRow, ResourceExportKind, ResourceExportRequest, TaskType, clone_row
 
 
 @dataclass
@@ -739,6 +739,7 @@ class BatchPage(QWidget):
 
 class ExportPage(QWidget):
     export_requested = Signal(object)
+    batch_export_requested = Signal(object)
     stop_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
@@ -763,6 +764,8 @@ class ExportPage(QWidget):
         form.setSpacing(14)
         self.session_name_input = QLineEdit()
         self.session_name_input.setPlaceholderText("填写微信群名、好友备注或会话名称")
+        self.session_names_input = QTextEdit()
+        self.session_names_input.setPlaceholderText("批量导出时，每行填写一个会话名称，例如：\n项目群\n客户A\n财务群")
         self.target_folder_input = QLineEdit()
         self.target_folder_input.setPlaceholderText("选择导出目录")
         self.choose_folder_button = QPushButton("选择文件夹")
@@ -786,6 +789,7 @@ class ExportPage(QWidget):
         self.file_limit_spin.setValue(50)
 
         form.addRow("会话名称", self.session_name_input)
+        form.addRow("批量会话", self.session_names_input)
         form.addRow("导出目录", target_row)
         form.addRow("消息条数", self.message_limit_spin)
         form.addRow("文件数量", self.file_limit_spin)
@@ -795,9 +799,14 @@ class ExportPage(QWidget):
         card.body_layout.addLayout(form)
 
         toolbar = QHBoxLayout()
-        for text, callback in [("示例填充", self._load_example), ("一键导出", self._request_export), ("停止", self.stop_requested.emit)]:
+        for text, callback in [
+            ("示例填充", self._load_example),
+            ("一键导出", self._request_export),
+            ("批量导出会话", self._request_batch_export),
+            ("停止", self.stop_requested.emit),
+        ]:
             button = QPushButton(text)
-            if text == "示例填充":
+            if text in {"示例填充", "批量导出会话"}:
                 button.setProperty("variant", "ghost")
             if text == "停止":
                 button.setProperty("variant", "secondary")
@@ -816,9 +825,13 @@ class ExportPage(QWidget):
         self.result_text.setReadOnly(True)
         self.result_text.setPlaceholderText("导出完成后，这里会显示导出结果、目录和注意事项。")
         card.body_layout.addWidget(self.result_text)
+        self.open_folder_button = QPushButton("打开导出目录")
+        self.open_folder_button.setProperty("variant", "secondary")
+        card.body_layout.addWidget(self.open_folder_button)
         layout.addWidget(card)
 
         self.choose_folder_button.clicked.connect(self._choose_folder)
+        self.open_folder_button.setEnabled(False)
         self.set_running_state(False)
 
     def current_request(self) -> tuple[ChatExportRequest | None, dict[str, str]]:
@@ -843,6 +856,23 @@ class ExportPage(QWidget):
             return
         self.export_requested.emit(request)
 
+    def _request_batch_export(self) -> None:
+        request = ChatBatchExportRequest(
+            session_names=self.session_names_input.toPlainText().splitlines(),
+            target_folder=self.target_folder_input.text().strip(),
+            export_messages=self.export_messages_checkbox.isChecked(),
+            export_files=self.export_files_checkbox.isChecked(),
+            export_images=self.export_images_checkbox.isChecked(),
+            message_limit=self.message_limit_spin.value(),
+            file_limit=self.file_limit_spin.value(),
+        )
+        errors = request.validate()
+        if errors:
+            QMessageBox.warning(self, "批量导出参数不完整", next(iter(errors.values())))
+            self.summary_label.setText("批量导出参数不完整，请先补齐后再执行。")
+            return
+        self.batch_export_requested.emit(request)
+
     def _choose_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择导出目录")
         if path:
@@ -850,6 +880,7 @@ class ExportPage(QWidget):
 
     def _load_example(self) -> None:
         self.session_name_input.setText("项目群")
+        self.session_names_input.setPlainText("项目群\n客户群A\n内部通知群")
         self.summary_label.setText("已填入示例会话名称，你可以直接改成自己的群名或好友备注。")
 
     def set_running_state(self, is_running: bool) -> None:
@@ -861,6 +892,7 @@ class ExportPage(QWidget):
         self.choose_folder_button.setEnabled(not is_running)
         for widget in [
             self.session_name_input,
+            self.session_names_input,
             self.target_folder_input,
             self.export_messages_checkbox,
             self.export_files_checkbox,
@@ -938,6 +970,10 @@ class ResourceToolsPage(QWidget):
         self.result_text.setReadOnly(True)
         self.result_text.setPlaceholderText("导出完成后，这里会显示导出数量、目录和摘要文件。")
         card.body_layout.addWidget(self.result_text)
+        self.open_folder_button = QPushButton("打开导出目录")
+        self.open_folder_button.setProperty("variant", "secondary")
+        self.open_folder_button.setEnabled(False)
+        card.body_layout.addWidget(self.open_folder_button)
         layout.addWidget(card)
 
         self.choose_folder_button.clicked.connect(self._choose_folder)
@@ -1069,6 +1105,50 @@ class TemplatesPage(QWidget):
         card.body_layout.addWidget(value_label)
         card.value_label = value_label  # type: ignore[attr-defined]
         return card
+
+
+class ExportHistoryPage(QWidget):
+    open_folder_requested = Signal()
+    open_summary_requested = Signal()
+    clear_history_requested = Signal()
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        card = CardFrame("导出历史")
+        toolbar = QHBoxLayout()
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("搜索导出类型、标题或目录")
+        self.open_folder_button = QPushButton("打开目录")
+        self.open_folder_button.setProperty("variant", "secondary")
+        self.open_summary_button = QPushButton("打开摘要")
+        self.open_summary_button.setProperty("variant", "ghost")
+        self.clear_button = QPushButton("清理导出历史")
+        self.clear_button.setProperty("variant", "secondary")
+        toolbar.addWidget(self.search_input)
+        toolbar.addWidget(self.open_folder_button)
+        toolbar.addWidget(self.open_summary_button)
+        toolbar.addWidget(self.clear_button)
+        card.body_layout.addLayout(toolbar)
+        self.summary_label = QLabel("最近的会话导出和资源导出都会记录在这里，方便回看和重新打开目录。")
+        self.summary_label.setProperty("role", "hint")
+        self.summary_label.setWordWrap(True)
+        card.body_layout.addWidget(self.summary_label)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["ID", "类型", "标题", "数量", "时间"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        card.body_layout.addWidget(self.table)
+        self.detail_text = QTextEdit()
+        self.detail_text.setReadOnly(True)
+        self.detail_text.setPlaceholderText("选中一条导出历史后，这里会显示目录、摘要路径和更多细节。")
+        card.body_layout.addWidget(self.detail_text)
+        layout.addWidget(card)
+
+        self.open_folder_button.setEnabled(False)
+        self.open_summary_button.setEnabled(False)
 
 
 class HistoryPage(QWidget):
