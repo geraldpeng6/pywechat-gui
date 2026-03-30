@@ -74,15 +74,23 @@ class ChatExportService:
                 on_progress("正在导出聊天文件...")
             files_folder = export_folder / "files"
             files_folder.mkdir(parents=True, exist_ok=True)
-            self.adapter.save_chat_files(
-                session_name=request.session_name,
-                number=request.file_limit,
-                target_folder=str(files_folder),
-                options=runtime_options,
-            )
-            exported_files = [path for path in files_folder.iterdir() if path.is_file()]
-            result.file_count = len(exported_files)
             result.files_folder = str(files_folder)
+            try:
+                self.adapter.save_chat_files(
+                    session_name=request.session_name,
+                    number=request.file_limit,
+                    target_folder=str(files_folder),
+                    options=runtime_options,
+                )
+                exported_files = [path for path in files_folder.iterdir() if path.is_file()]
+                result.file_count = len(exported_files)
+            except Exception as exc:
+                if not self._looks_like_chat_file_parse_error(exc):
+                    raise
+                warnings.append(
+                    "聊天文件导出已跳过：当前未能从微信文件列表识别出结果数量。"
+                    "这通常表示该会话暂无可导出的聊天文件，或当前微信界面文案与 pyweixin 的解析逻辑不匹配。"
+                )
 
         if request.export_images:
             warnings.append("当前库未提供稳定的历史图片/视频一键导出能力，本次已跳过图片与视频。")
@@ -202,3 +210,8 @@ class ChatExportService:
     def _check_stop(should_stop: StopCallback | None) -> None:
         if should_stop and should_stop():
             raise RuntimeError("导出任务已停止")
+
+    @staticmethod
+    def _looks_like_chat_file_parse_error(exc: Exception) -> bool:
+        message = str(exc)
+        return isinstance(exc, AttributeError) and "'NoneType' object has no attribute 'group'" in message
