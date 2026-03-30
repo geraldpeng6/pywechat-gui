@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..import_export import dump_rows, dump_table, load_rows, load_session_names
-from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupMemberRow, GroupMembersRequest, GroupSummaryRow, MessageBatchRow, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row
+from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupSummaryRow, MessageBatchRow, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row
 
 
 @dataclass
@@ -1075,7 +1075,6 @@ class ResourceToolsPage(QWidget):
 class SessionToolsPage(QWidget):
     scan_sessions_requested = Signal(object)
     scan_groups_requested = Signal()
-    load_group_members_requested = Signal(object)
     use_session_names_requested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None):
@@ -1084,23 +1083,18 @@ class SessionToolsPage(QWidget):
         layout = QVBoxLayout(self)
 
         session_card = CardFrame("会话与群工具", hero=True)
-        intro = QLabel("把微信里已经存在的会话、群聊和群成员名单直接采集出来，减少手工抄名字的出错率。")
+        intro = QLabel("把微信里已经存在的会话和群聊名单直接采集出来，减少手工抄名字的出错率。")
         intro.setProperty("role", "pageSubtitle")
         intro.setWordWrap(True)
         session_card.body_layout.addWidget(intro)
-        helper = QLabel("适合做批量导出前的名单整理、群成员留档、交接核对。执行时同样会占用微信界面。")
+        helper = QLabel("适合做批量导出前的名单整理和交接核对。执行时同样会占用微信界面。")
         helper.setProperty("role", "hint")
         helper.setWordWrap(True)
         session_card.body_layout.addWidget(helper)
 
         session_options = QHBoxLayout()
         self.chatted_only_checkbox = QCheckBox("只采集聊过天的会话")
-        self.no_official_checkbox = QCheckBox("自动排除公众号（当前版本暂不支持）")
-        self.no_official_checkbox.setChecked(True)
-        self.no_official_checkbox.setEnabled(False)
-        self.no_official_checkbox.setToolTip("当前 pyweixin 还没有提供公众号过滤参数，后续版本再补。")
         session_options.addWidget(self.chatted_only_checkbox)
-        session_options.addWidget(self.no_official_checkbox)
         session_options.addStretch(1)
         session_card.body_layout.addLayout(session_options)
 
@@ -1141,82 +1135,35 @@ class SessionToolsPage(QWidget):
         group_toolbar.addStretch(1)
         group_card.body_layout.addLayout(group_toolbar)
 
-        self.group_summary_label = QLabel("如果你记不清准确群名，可以先采集群聊列表，再直接回填到批量会话导出。当前版本暂不提供群人数。")
+        self.group_summary_label = QLabel("如果你记不清准确群名，可以先采集群聊列表，再直接回填到批量会话导出。")
         self.group_summary_label.setProperty("role", "muted")
         self.group_summary_label.setWordWrap(True)
         group_card.body_layout.addWidget(self.group_summary_label)
 
-        self.group_table = QTableWidget(0, 2)
-        self.group_table.setHorizontalHeaderLabels(["群聊名称", "群人数"])
+        self.group_table = QTableWidget(0, 1)
+        self.group_table.setHorizontalHeaderLabels(["群聊名称"])
         self.group_table.verticalHeader().setVisible(False)
         self.group_table.horizontalHeader().setStretchLastSection(True)
         self.group_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.group_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         group_card.body_layout.addWidget(self.group_table)
-
-        form = QFormLayout()
-        self.group_name_input = QLineEdit()
-        self.group_name_input.setPlaceholderText("填写要读取成员名单的群聊名称")
-        form.addRow("群聊名称", self.group_name_input)
-        group_card.body_layout.addLayout(form)
-
-        member_toolbar = QHBoxLayout()
-        self.load_members_button = QPushButton("读取群成员（暂不支持）")
-        self.export_members_button = QPushButton("导出群成员名单")
-        self.export_members_button.setProperty("variant", "secondary")
-        member_toolbar.addWidget(self.load_members_button)
-        member_toolbar.addWidget(self.export_members_button)
-        member_toolbar.addStretch(1)
-        group_card.body_layout.addLayout(member_toolbar)
-
-        self.member_summary_label = QLabel("当前仓库里的 pyweixin 暂未提供群成员名单采集能力，这里先保留入口位置，后续再接。")
-        self.member_summary_label.setProperty("role", "muted")
-        self.member_summary_label.setWordWrap(True)
-        group_card.body_layout.addWidget(self.member_summary_label)
-
-        self.member_table = QTableWidget(0, 3)
-        self.member_table.setHorizontalHeaderLabels(["群聊名称", "群昵称", "微信昵称/备注"])
-        self.member_table.verticalHeader().setVisible(False)
-        self.member_table.horizontalHeader().setStretchLastSection(True)
-        self.member_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.member_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
-        group_card.body_layout.addWidget(self.member_table)
         layout.addWidget(group_card)
 
         self.scan_sessions_button.clicked.connect(self._request_scan_sessions)
         self.scan_groups_button.clicked.connect(lambda: self.scan_groups_requested.emit())
-        self.load_members_button.clicked.connect(self._request_group_members)
         self.export_sessions_button.clicked.connect(self._export_session_rows)
         self.export_groups_button.clicked.connect(self._export_group_rows)
-        self.export_members_button.clicked.connect(self._export_member_rows)
         self.use_sessions_button.clicked.connect(lambda: self._emit_selected_names(self.session_table, 0))
         self.use_groups_button.clicked.connect(lambda: self._emit_selected_names(self.group_table, 0))
 
         self.export_sessions_button.setEnabled(False)
         self.export_groups_button.setEnabled(False)
-        self.export_members_button.setEnabled(False)
         self.use_sessions_button.setEnabled(False)
         self.use_groups_button.setEnabled(False)
-        self.load_members_button.setEnabled(False)
-        self.group_name_input.setEnabled(False)
         self.set_running_state(False)
 
     def _request_scan_sessions(self) -> None:
-        self.scan_sessions_requested.emit(
-            SessionScanRequest(
-                chatted_only=self.chatted_only_checkbox.isChecked(),
-                no_official=self.no_official_checkbox.isChecked(),
-            )
-        )
-
-    def _request_group_members(self) -> None:
-        request = GroupMembersRequest(group_name=self.group_name_input.text().strip())
-        errors = request.validate()
-        if errors:
-            QMessageBox.warning(self, "群成员名单", next(iter(errors.values())))
-            self.member_summary_label.setText("群聊名称为空，请先填写后再读取成员名单。")
-            return
-        self.load_group_members_requested.emit(request)
+        self.scan_sessions_requested.emit(SessionScanRequest(chatted_only=self.chatted_only_checkbox.isChecked()))
 
     def set_session_rows(self, rows: list[SessionSummaryRow]) -> None:
         self.session_table.setRowCount(0)
@@ -1235,23 +1182,10 @@ class SessionToolsPage(QWidget):
         for row_index, row in enumerate(rows):
             self.group_table.insertRow(row_index)
             self.group_table.setItem(row_index, 0, QTableWidgetItem(row.group_name))
-            self.group_table.setItem(row_index, 1, QTableWidgetItem(row.member_count))
         self.group_table.resizeColumnsToContents()
         self.export_groups_button.setEnabled(bool(rows))
         self.use_groups_button.setEnabled(bool(rows))
-        self.group_summary_label.setText(f"已采集 {len(rows)} 个群聊，可直接导出群聊名单或回填到会话导出页。群人数在当前版本里暂不可得。")
-
-    def set_group_members(self, group_name: str, rows: list[GroupMemberRow]) -> None:
-        self.group_name_input.setText(group_name)
-        self.member_table.setRowCount(0)
-        for row_index, row in enumerate(rows):
-            self.member_table.insertRow(row_index)
-            self.member_table.setItem(row_index, 0, QTableWidgetItem(row.group_name))
-            self.member_table.setItem(row_index, 1, QTableWidgetItem(row.alias))
-            self.member_table.setItem(row_index, 2, QTableWidgetItem(row.nickname))
-        self.member_table.resizeColumnsToContents()
-        self.export_members_button.setEnabled(bool(rows))
-        self.member_summary_label.setText(f"已读取 {group_name} 的 {len(rows)} 位成员，可直接导出名单。")
+        self.group_summary_label.setText(f"已采集 {len(rows)} 个群聊，可直接导出群聊名单或回填到会话导出页。")
 
     def set_running_state(self, is_running: bool) -> None:
         for widget in [
@@ -1260,19 +1194,14 @@ class SessionToolsPage(QWidget):
             self.scan_groups_button,
         ]:
             widget.setEnabled(not is_running)
-        self.no_official_checkbox.setEnabled(False)
-        self.load_members_button.setEnabled(False)
-        self.group_name_input.setEnabled(False)
         if is_running:
             self.export_sessions_button.setEnabled(False)
             self.export_groups_button.setEnabled(False)
-            self.export_members_button.setEnabled(False)
             self.use_sessions_button.setEnabled(False)
             self.use_groups_button.setEnabled(False)
         else:
             self.export_sessions_button.setEnabled(self.session_table.rowCount() > 0)
             self.export_groups_button.setEnabled(self.group_table.rowCount() > 0)
-            self.export_members_button.setEnabled(False)
             self.use_sessions_button.setEnabled(self.session_table.rowCount() > 0)
             self.use_groups_button.setEnabled(self.group_table.rowCount() > 0)
 
@@ -1316,22 +1245,10 @@ class SessionToolsPage(QWidget):
         rows = [
             {
                 "群聊名称": self.group_table.item(row, 0).text() if self.group_table.item(row, 0) else "",
-                "群人数": self.group_table.item(row, 1).text() if self.group_table.item(row, 1) else "",
             }
             for row in range(self.group_table.rowCount())
         ]
-        self._export_generic_rows("导出群聊名单", ["群聊名称", "群人数"], rows)
-
-    def _export_member_rows(self) -> None:
-        rows = [
-            {
-                "群聊名称": self.member_table.item(row, 0).text() if self.member_table.item(row, 0) else "",
-                "群昵称": self.member_table.item(row, 1).text() if self.member_table.item(row, 1) else "",
-                "微信昵称/备注": self.member_table.item(row, 2).text() if self.member_table.item(row, 2) else "",
-            }
-            for row in range(self.member_table.rowCount())
-        ]
-        self._export_generic_rows("导出群成员名单", ["群聊名称", "群昵称", "微信昵称/备注"], rows)
+        self._export_generic_rows("导出群聊名单", ["群聊名称"], rows)
 
     def _export_generic_rows(self, title: str, headers: list[str], rows: list[dict[str, Any]]) -> None:
         if not rows:

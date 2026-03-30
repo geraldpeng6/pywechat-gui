@@ -34,7 +34,7 @@ class AdapterTestCase(unittest.TestCase):
 
         adapter = PyWeixinAdapter()
         with patch.object(adapter, "_load_pyweixin", return_value=FakePyWeixin()):
-            rows = adapter.dump_sessions(chatted_only=True, no_official=True, options=RuntimeOptions())
+            rows = adapter.dump_sessions(chatted_only=True, options=RuntimeOptions())
         self.assertEqual(rows[0].session_name, "项目群")
         self.assertEqual(rows[1].last_message, "请报价")
 
@@ -52,11 +52,6 @@ class AdapterTestCase(unittest.TestCase):
             rows = adapter.dump_groups(RuntimeOptions())
         self.assertEqual(rows[0].group_name, "项目群")
         self.assertEqual(rows[0].member_count, "")
-
-    def test_dump_group_members_is_marked_unsupported(self):
-        adapter = PyWeixinAdapter()
-        with self.assertRaises(NotImplementedError):
-            adapter.dump_group_members("项目群", RuntimeOptions())
 
 
 if __name__ == "__main__":

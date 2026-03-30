@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, Signal
 
 from .error_handling import map_exception
-from .models import GroupMembersRequest, RuntimeOptions, SessionScanRequest
+from .models import RuntimeOptions, SessionScanRequest
 from .session_tools_service import SessionToolsService
 
 
@@ -17,7 +17,7 @@ class SessionToolsWorker(QObject):
         service: SessionToolsService,
         action: str,
         runtime_options: RuntimeOptions,
-        request: SessionScanRequest | GroupMembersRequest | None = None,
+        request: SessionScanRequest | None = None,
     ):
         super().__init__()
         self.service = service
@@ -38,14 +38,6 @@ class SessionToolsWorker(QObject):
                 )
             elif self.action == "scan_groups":
                 result = self.service.scan_groups(
-                    runtime_options=self.runtime_options,
-                    on_progress=self.progress.emit,
-                )
-            elif self.action == "load_group_members":
-                if not isinstance(self.request, GroupMembersRequest):
-                    raise ValueError("缺少群成员查询参数")
-                result = self.service.load_group_members(
-                    request=self.request,
                     runtime_options=self.runtime_options,
                     on_progress=self.progress.emit,
                 )

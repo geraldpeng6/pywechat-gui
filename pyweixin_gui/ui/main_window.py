@@ -32,7 +32,7 @@ from ..executor import BatchExecutor, failed_rows_from_execution
 from ..export_service import ChatExportService
 from ..export_worker import ChatExportWorker
 from ..import_export import dump_rows
-from ..models import AppSettings, ChatBatchExportRequest, ChatBatchExportResult, ChatExportRequest, ChatExportResult, ExportHistoryRecord, FileBatchRow, GroupMembersRequest, GroupMembersResult, GroupScanResult, MessageBatchRow, ResourceExportRequest, ResourceExportResult, SessionScanRequest, SessionScanResult, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json
+from ..models import AppSettings, ChatBatchExportRequest, ChatBatchExportResult, ChatExportRequest, ChatExportResult, ExportHistoryRecord, FileBatchRow, GroupScanResult, MessageBatchRow, ResourceExportRequest, ResourceExportResult, SessionScanRequest, SessionScanResult, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json
 from ..presentation import execution_metrics, export_history_can_rerun, export_history_can_retry_failed, export_history_failed_sessions, filter_executions, filter_templates, format_export_history_detail, rebuild_export_request, serialize_export_detail, summarize_failures, template_metrics, template_type_label
 from ..resource_export_service import ResourceExportService, export_kind_label
 from ..resource_export_worker import ResourceExportWorker
@@ -166,7 +166,6 @@ class MainWindow(QMainWindow):
         self.resource_page.open_folder_button.clicked.connect(lambda: self._open_export_page_folder(self.resource_page))
         self.session_tools_page.scan_sessions_requested.connect(self.start_session_scan)
         self.session_tools_page.scan_groups_requested.connect(self.start_group_scan)
-        self.session_tools_page.load_group_members_requested.connect(self.start_group_members_scan)
         self.session_tools_page.use_session_names_requested.connect(self.load_session_names_into_export_page)
         self.message_page.save_template_requested.connect(self.save_template)
         self.file_page.save_template_requested.connect(self.save_template)
@@ -587,17 +586,10 @@ class MainWindow(QMainWindow):
             start_message="群聊采集已开始，请等待完成。",
         )
 
-    def start_group_members_scan(self, request: GroupMembersRequest) -> None:
-        self._start_session_tools_worker(
-            action="load_group_members",
-            request=request,
-            start_message=f"正在读取 {request.group_name} 的群成员，请等待完成。",
-        )
-
     def _start_session_tools_worker(
         self,
         action: str,
-        request: SessionScanRequest | GroupMembersRequest | None,
+        request: SessionScanRequest | None,
         start_message: str,
     ) -> None:
         if self.worker_thread is not None:
@@ -811,7 +803,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(message, 3000)
         self.session_tools_page.session_summary_label.setText(message)
 
-    def _handle_session_tools_finished(self, action: str, result: SessionScanResult | GroupScanResult | GroupMembersResult) -> None:
+    def _handle_session_tools_finished(self, action: str, result: SessionScanResult | GroupScanResult) -> None:
         if action == "scan_sessions" and isinstance(result, SessionScanResult):
             self.session_tools_page.set_session_rows(result.rows)
             self.status_bar.showMessage(f"已采集 {len(result.rows)} 个会话。", 5000)
@@ -819,10 +811,6 @@ class MainWindow(QMainWindow):
         if action == "scan_groups" and isinstance(result, GroupScanResult):
             self.session_tools_page.set_group_rows(result.rows)
             self.status_bar.showMessage(f"已采集 {len(result.rows)} 个群聊。", 5000)
-            return
-        if action == "load_group_members" and isinstance(result, GroupMembersResult):
-            self.session_tools_page.set_group_members(result.group_name, result.rows)
-            self.status_bar.showMessage(f"已读取 {result.group_name} 的 {result.member_count} 位成员。", 5000)
             return
 
     def _handle_worker_failure(self, ui_error: UiError) -> None:

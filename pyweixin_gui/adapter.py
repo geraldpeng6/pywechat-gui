@@ -3,7 +3,7 @@ from __future__ import annotations
 import platform
 
 from .error_handling import UiError, map_exception
-from .models import EnvironmentStatus, FileBatchRow, GroupMemberRow, GroupSummaryRow, MessageBatchRow, RuntimeOptions, SessionSummaryRow
+from .models import EnvironmentStatus, FileBatchRow, GroupSummaryRow, MessageBatchRow, RuntimeOptions, SessionSummaryRow
 from . import __version__
 
 
@@ -171,7 +171,7 @@ class PyWeixinAdapter:
             target_folder=target_folder,
         )
 
-    def dump_sessions(self, chatted_only: bool, no_official: bool, options: RuntimeOptions) -> list[SessionSummaryRow]:
+    def dump_sessions(self, chatted_only: bool, options: RuntimeOptions) -> list[SessionSummaryRow]:
         pyweixin = self._load_pyweixin()
         sessions = pyweixin.Messages.dump_sessions(
             chat_only=chatted_only,
@@ -197,14 +197,10 @@ class PyWeixinAdapter:
         return [
             GroupSummaryRow(
                 group_name=str(group or "").strip(),
-                member_count="",
             )
             for group in groups
             if str(group or "").strip()
         ]
-
-    def dump_group_members(self, group_name: str, options: RuntimeOptions) -> list[GroupMemberRow]:
-        raise NotImplementedError("当前 pyweixin 暂未提供群成员名单采集能力。")
 
     @staticmethod
     def map_runtime_exception(exc: BaseException) -> UiError:
