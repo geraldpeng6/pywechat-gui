@@ -27,8 +27,9 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\PyWeChat GUI
-DefaultGroupName=PyWeChat GUI
+DefaultGroupName=PyWeChat GUI 工作台
 UninstallDisplayIcon={app}\{#MyAppExeName}
+SetupIconFile=assets\pywechat-gui.ico
 LicenseFile=..\LICENSE
 OutputDir=..\dist
 OutputBaseFilename={#MyOutputBaseFilename}
@@ -39,7 +40,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 
 [Languages]
-Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："; Flags: unchecked
@@ -48,8 +49,8 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\PyWeChat GUI"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\PyWeChat GUI"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\PyWeChat GUI 工作台"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\PyWeChat GUI 工作台"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "启动 PyWeChat GUI"; Flags: nowait postinstall skipifsilent

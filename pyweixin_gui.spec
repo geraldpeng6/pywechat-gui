@@ -12,7 +12,9 @@ a = Analysis(
     ['pyweixin_gui/app.py'],
     pathex=[str(workspace)],
     binaries=[],
-    datas=[],
+    datas=[
+        (str(workspace / 'pyweixin_gui' / 'assets' / 'pywechat-gui.ico'), 'pyweixin_gui/assets'),
+    ],
     hiddenimports=['PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets'],
     hookspath=[],
     hooksconfig={},
@@ -31,6 +33,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='pywechat-gui',
+    icon=str(workspace / 'pyweixin_gui' / 'assets' / 'pywechat-gui.ico'),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
