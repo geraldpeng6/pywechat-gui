@@ -1263,6 +1263,7 @@ class SessionToolsPage(QWidget):
 class RelayWorkbenchPage(QWidget):
     collect_texts_requested = Signal(object)
     collect_files_requested = Signal(object)
+    import_export_folder_requested = Signal(str)
     validate_routes_requested = Signal(object)
     test_send_requested = Signal(object)
     send_requested = Signal(object)
@@ -1323,11 +1324,12 @@ class RelayWorkbenchPage(QWidget):
         source_actions = QHBoxLayout()
         self.collect_texts_button = QPushButton("采集文本")
         self.collect_files_button = QPushButton("采集文件")
+        self.import_export_folder_button = QPushButton("从导出目录导入")
         self.add_text_button = QPushButton("手动加文本")
         self.add_files_button = QPushButton("补充本地文件/图片")
         self.clear_package_button = QPushButton("清空转发包")
         self.clear_package_button.setProperty("variant", "secondary")
-        for button in [self.collect_texts_button, self.collect_files_button, self.add_text_button, self.add_files_button, self.clear_package_button]:
+        for button in [self.collect_texts_button, self.collect_files_button, self.import_export_folder_button, self.add_text_button, self.add_files_button, self.clear_package_button]:
             source_actions.addWidget(button)
         source_actions.addStretch(1)
         source_card.body_layout.addLayout(source_actions)
@@ -1339,11 +1341,13 @@ class RelayWorkbenchPage(QWidget):
 
         package_card = CardFrame("转发包编辑器")
         package_toolbar = QHBoxLayout()
+        self.keep_latest_files_button = QPushButton("只保留最新文件")
+        self.keep_latest_files_button.setProperty("variant", "ghost")
         self.move_up_button = QPushButton("上移")
         self.move_down_button = QPushButton("下移")
         self.remove_package_button = QPushButton("删除选中")
         self.remove_package_button.setProperty("variant", "secondary")
-        for button in [self.move_up_button, self.move_down_button, self.remove_package_button]:
+        for button in [self.keep_latest_files_button, self.move_up_button, self.move_down_button, self.remove_package_button]:
             package_toolbar.addWidget(button)
         package_toolbar.addStretch(1)
         package_card.body_layout.addLayout(package_toolbar)
@@ -1372,7 +1376,7 @@ class RelayWorkbenchPage(QWidget):
             route_toolbar.addWidget(button)
         route_toolbar.addStretch(1)
         route_card.body_layout.addLayout(route_toolbar)
-        route_tip = QLabel("路由表支持 Excel/CSV 导入。每行一条“上游 -> 下游”的映射。正式发送和验证会自动按当前上游筛选。")
+        route_tip = QLabel("路由表支持 Excel/CSV 导入。每行可写一条“上游 -> 下游”映射，也支持在“下游会话列表”里用 | 一次写多个下游。")
         route_tip.setProperty("role", "hint")
         route_tip.setWordWrap(True)
         route_card.body_layout.addWidget(route_tip)
@@ -1404,9 +1408,11 @@ class RelayWorkbenchPage(QWidget):
 
         self.collect_texts_button.clicked.connect(self._request_collect_texts)
         self.collect_files_button.clicked.connect(self._request_collect_files)
+        self.import_export_folder_button.clicked.connect(self._request_import_export_folder)
         self.add_text_button.clicked.connect(self._add_manual_text)
         self.add_files_button.clicked.connect(self._add_local_files)
         self.clear_package_button.clicked.connect(self.clear_package_rows)
+        self.keep_latest_files_button.clicked.connect(self.keep_latest_file_rows)
         self.move_up_button.clicked.connect(self.move_selected_package_rows_up)
         self.move_down_button.clicked.connect(self.move_selected_package_rows_down)
         self.remove_package_button.clicked.connect(self.remove_selected_package_rows)
@@ -1488,6 +1494,12 @@ class RelayWorkbenchPage(QWidget):
                 )
             )
         self.append_package_rows(rows, f"已补充 {len(rows)} 个本地文件/图片。")
+
+    def _request_import_export_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "选择会话导出目录")
+        if not path:
+            return
+        self.import_export_folder_requested.emit(path)
 
     def append_package_rows(self, rows: list[RelayPackageRow], summary: str = "") -> None:
         start = self.package_table.rowCount()
@@ -1612,6 +1624,22 @@ class RelayWorkbenchPage(QWidget):
         self.package_table.setRowCount(0)
         self.refresh_package_summary("转发包已清空。")
 
+    def replace_package_rows(self, rows: list[RelayPackageRow], summary: str = "") -> None:
+        self.package_table.setRowCount(0)
+        self.append_package_rows(rows, summary)
+
+    def keep_latest_file_rows(self) -> None:
+        try:
+            from ..relay_service import RelayService
+        except Exception:
+            return
+        rows = self.package_rows()
+        if not rows:
+            QMessageBox.information(self, "转发包编辑器", "当前没有可处理的文件项。")
+            return
+        updated_rows = RelayService.keep_latest_file_rows(rows)
+        self.replace_package_rows(updated_rows, "已自动取消勾选同名旧文件，只保留最新版本。请再人工确认一次。")
+
     def apply_validation_result(self, rows: list[RelayRouteRow], summary: str) -> None:
         self.set_route_rows(rows, summary)
         self.result_text.setPlainText(summary)
@@ -1651,9 +1679,11 @@ class RelayWorkbenchPage(QWidget):
             self.file_limit_spin,
             self.collect_texts_button,
             self.collect_files_button,
+            self.import_export_folder_button,
             self.add_text_button,
             self.add_files_button,
             self.clear_package_button,
+            self.keep_latest_files_button,
             self.move_up_button,
             self.move_down_button,
             self.remove_package_button,

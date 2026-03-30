@@ -57,6 +57,8 @@ ROUTE_HEADER_ALIASES = {
     "downstream_session": "downstream_session",
     "下游会话": "downstream_session",
     "target_session": "downstream_session",
+    "downstream_sessions": "downstream_sessions",
+    "下游会话列表": "downstream_sessions",
     "remark": "remark",
     "备注": "remark",
 }
@@ -119,7 +121,10 @@ def load_route_rows(path: str | Path) -> list[RelayRouteRow]:
     else:
         raise ValueError("路由表仅支持导入 .csv 或 .xlsx 文件")
     normalized = [_normalize_route_mapping(row) for row in rows]
-    return [RelayRouteRow.from_mapping(row) for row in normalized]
+    expanded: list[RelayRouteRow] = []
+    for row in normalized:
+        expanded.extend(_expand_route_mapping(row))
+    return expanded
 
 
 def dump_table(headers: list[str], rows: list[dict[str, Any]], path: str | Path) -> None:
@@ -201,3 +206,22 @@ def _normalize_route_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
         if canonical:
             normalized[canonical] = value
     return normalized
+
+
+def _expand_route_mapping(mapping: dict[str, Any]) -> list[RelayRouteRow]:
+    downstream = str(mapping.get("downstream_session", "") or "").strip()
+    downstreams = str(mapping.get("downstream_sessions", "") or "").strip()
+    if downstreams:
+        targets = [item.strip() for item in downstreams.replace("\n", "|").replace("，", "|").replace(",", "|").split("|") if item.strip()]
+        return [
+            RelayRouteRow.from_mapping(
+                {
+                    "enabled": mapping.get("enabled", True),
+                    "upstream_session": mapping.get("upstream_session", ""),
+                    "downstream_session": target,
+                    "remark": mapping.get("remark", ""),
+                }
+            )
+            for target in targets
+        ]
+    return [RelayRouteRow.from_mapping(mapping | {"downstream_session": downstream})]

@@ -174,6 +174,7 @@ class MainWindow(QMainWindow):
         self.session_tools_page.use_session_names_requested.connect(self.load_session_names_into_export_page)
         self.relay_page.collect_texts_requested.connect(self.start_relay_collect_texts)
         self.relay_page.collect_files_requested.connect(self.start_relay_collect_files)
+        self.relay_page.import_export_folder_requested.connect(self.import_relay_export_folder)
         self.relay_page.validate_routes_requested.connect(self.start_relay_validate_routes)
         self.relay_page.test_send_requested.connect(self.start_relay_test_send)
         self.relay_page.send_requested.connect(self.start_relay_send)
@@ -601,6 +602,21 @@ class MainWindow(QMainWindow):
 
     def start_relay_collect_files(self, request: RelayCollectFilesRequest) -> None:
         self._start_relay_worker("collect_files", request, "正在采集上游聊天文件，请等待完成。")
+
+    def import_relay_export_folder(self, folder_path: str) -> None:
+        try:
+            result = self.relay_service.load_export_folder_rows(folder_path)
+        except Exception as exc:
+            ui_error = self.adapter.map_runtime_exception(exc)
+            self._show_error_dialog(ui_error, "导入会话导出目录失败")
+            return
+        if result.source_session:
+            self.relay_page.source_session_input.setText(result.source_session)
+        self.relay_page.append_package_rows(
+            result.rows,
+            result.warning or f"已从导出目录导入 {len(result.rows)} 条候选内容，请人工勾选真正需要转发的项。",
+        )
+        self.status_bar.showMessage("会话导出目录已导入到转发包。", 5000)
 
     def start_relay_validate_routes(self, request: RelayValidationRequest) -> None:
         self._start_relay_worker("validate_routes", request, "正在验证下游会话，请等待完成。")

@@ -102,6 +102,39 @@ class RelayServiceTestCase(unittest.TestCase):
         self.assertEqual(result.success_count, 1)
         self.assertEqual(result.failure_count, 1)
 
+    def test_load_export_folder_rows(self):
+        export_root = Path(self.tempdir.name) / "导出目录"
+        export_root.mkdir(parents=True, exist_ok=True)
+        (export_root / "export-summary.json").write_text('{"session_name":"上游A"}', encoding="utf-8")
+        (export_root / "messages.json").write_text(
+            '[{"index":1,"timestamp":"今天 10:00","message":"文本1"},{"index":2,"timestamp":"今天 10:01","message":"文本2"}]',
+            encoding="utf-8",
+        )
+        files_dir = export_root / "files"
+        files_dir.mkdir(parents=True, exist_ok=True)
+        (files_dir / "报价单.pdf").write_text("demo", encoding="utf-8")
+        result = self.service.load_export_folder_rows(export_root)
+        self.assertEqual(result.source_session, "上游A")
+        self.assertEqual(len(result.rows), 3)
+        self.assertEqual(result.rows[0].item_type, RelayItemType.TEXT)
+
+    def test_keep_latest_file_rows(self):
+        with TemporaryDirectory() as tempdir:
+            folder = Path(tempdir)
+            old_file = folder / "报价单(1).pdf"
+            new_file = folder / "报价单.pdf"
+            old_file.write_text("old", encoding="utf-8")
+            new_file.write_text("new", encoding="utf-8")
+            rows = [
+                RelayPackageRow(sequence=1, item_type=RelayItemType.TEXT, content="文本1"),
+                RelayPackageRow(sequence=2, item_type=RelayItemType.FILE, file_path=str(old_file), content=old_file.name),
+                RelayPackageRow(sequence=3, item_type=RelayItemType.FILE, file_path=str(new_file), content=new_file.name),
+            ]
+            updated = RelayService.keep_latest_file_rows(rows)
+            self.assertTrue(updated[0].enabled)
+            self.assertFalse(updated[1].enabled)
+            self.assertTrue(updated[2].enabled)
+
 
 if __name__ == "__main__":
     unittest.main()

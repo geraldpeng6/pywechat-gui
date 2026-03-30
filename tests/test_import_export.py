@@ -87,6 +87,21 @@ class ImportExportTestCase(unittest.TestCase):
             dump_route_rows([], path)
             self.assertTrue(path.exists())
 
+    def test_load_route_rows_expands_multi_downstream_column(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "routes.csv"
+            dump_table(
+                ["启用", "上游会话", "下游会话列表", "备注"],
+                [
+                    {"启用": True, "上游会话": "上游A", "下游会话列表": "下游B|下游C", "备注": "批量"},
+                ],
+                path,
+            )
+            rows = load_route_rows(path)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0].downstream_session, "下游B")
+            self.assertEqual(rows[1].downstream_session, "下游C")
+
 
 if __name__ == "__main__":
     unittest.main()

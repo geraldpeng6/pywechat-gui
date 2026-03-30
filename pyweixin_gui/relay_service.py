@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from pathlib import Path
+import re
 from typing import Callable
 
 from .adapter import PyWeixinAdapter
@@ -150,6 +152,57 @@ class RelayService:
             missing_count=missing_count,
         )
 
+    def load_export_folder_rows(self, folder_path: str | Path) -> RelayCollectionResult:
+        folder = Path(folder_path).expanduser().resolve()
+        if not folder.is_dir():
+            raise ValueError("所选导出目录不存在。")
+        source_session = folder.name
+        summary_json = folder / "export-summary.json"
+        if summary_json.exists():
+            try:
+                summary = json.loads(summary_json.read_text(encoding="utf-8"))
+                source_session = str(summary.get("session_name", source_session)).strip() or source_session
+            except json.JSONDecodeError:
+                pass
+
+        rows: list[RelayPackageRow] = []
+        messages_json = folder / "messages.json"
+        if messages_json.exists():
+            payload = json.loads(messages_json.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                for index, item in enumerate(payload, start=1):
+                    if not isinstance(item, dict):
+                        continue
+                    message = str(item.get("message", "") or "").strip()
+                    if not message:
+                        continue
+                    rows.append(
+                        RelayPackageRow(
+                            sequence=len(rows) + 1,
+                            item_type=RelayItemType.TEXT,
+                            source_session=source_session,
+                            content=message,
+                            collected_at=str(item.get("timestamp", "") or "").strip(),
+                        )
+                    )
+        files_folder = folder / "files"
+        if files_folder.exists():
+            file_items = sorted([path for path in files_folder.iterdir() if path.is_file()], key=lambda item: item.stat().st_mtime, reverse=True)
+            for path in file_items:
+                item_type = RelayItemType.IMAGE if path.suffix.lower() in IMAGE_SUFFIXES else RelayItemType.FILE
+                rows.append(
+                    RelayPackageRow(
+                        sequence=len(rows) + 1,
+                        item_type=item_type,
+                        source_session=source_session,
+                        content=path.name,
+                        file_path=str(path),
+                        collected_at=datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                )
+        warning = "" if rows else "导出目录里没有识别到可转发的文本或文件。"
+        return RelayCollectionResult(source_session=source_session, rows=rows, warning=warning)
+
     def send_package(
         self,
         request: RelaySendRequest,
@@ -211,6 +264,29 @@ class RelayService:
         return [row for row in route_rows if row.upstream_session.strip() == source_session.strip()]
 
     @staticmethod
+    def keep_latest_file_rows(rows: list[RelayPackageRow]) -> list[RelayPackageRow]:
+        latest_by_key: dict[str, tuple[float, int]] = {}
+        for index, row in enumerate(rows):
+            if row.item_type not in {RelayItemType.FILE, RelayItemType.IMAGE} or not row.file_path:
+                continue
+            key = RelayService._normalized_file_key(row.file_path)
+            score = RelayService._file_score(row)
+            existing = latest_by_key.get(key)
+            if existing is None or score > existing[0]:
+                latest_by_key[key] = (score, index)
+        updated: list[RelayPackageRow] = []
+        for index, row in enumerate(rows):
+            copied = RelayPackageRow.from_mapping(row.__dict__ | {"item_type": row.item_type.value})
+            if row.item_type in {RelayItemType.FILE, RelayItemType.IMAGE} and row.file_path:
+                key = RelayService._normalized_file_key(row.file_path)
+                latest_index = latest_by_key.get(key, (-1, -1))[1]
+                if latest_index != index:
+                    copied.enabled = False
+                    copied.remark = "旧版本，已自动取消勾选"
+            updated.append(copied)
+        return updated
+
+    @staticmethod
     def _unique_targets(targets: list[str]) -> list[str]:
         seen: set[str] = set()
         result: list[str] = []
@@ -230,3 +306,16 @@ class RelayService:
         safe_name = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in source_session).strip("_") or "relay-source"
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         return dirs["local_dir"] / "relay-cache" / f"{safe_name}-{timestamp}"
+
+    @staticmethod
+    def _normalized_file_key(file_path: str) -> str:
+        path = Path(file_path)
+        stem = re.sub(r"\(\d+\)$", "", path.stem)
+        return f"{stem.lower()}{path.suffix.lower()}"
+
+    @staticmethod
+    def _file_score(row: RelayPackageRow) -> float:
+        try:
+            return Path(row.file_path).stat().st_mtime
+        except OSError:
+            return float(row.sequence)
