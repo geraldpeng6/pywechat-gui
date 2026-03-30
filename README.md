@@ -58,8 +58,19 @@ pyinstaller pyweixin_gui.spec
 
 GitHub Actions 自动打包：
 - 已提供 Windows 自动打包工作流：`.github/workflows/build-windows.yml`
-- 推送到 `main` 或手动触发后，会自动生成 `pywechat-gui-windows.zip`
+- 推送到 `main` 或手动触发后，会自动生成带日期和短 SHA 的 Windows 包
+  例如：`pywechat-gui-windows-20260330-abcdef1.zip`
 - 可在 GitHub Actions 的运行产物里直接下载
+
+下载步骤：
+1. 打开仓库的 `Actions` 页面
+2. 点击最近一次成功的 `Build Windows Package`
+3. 在页面底部找到 `Artifacts`
+4. 下载名为 `pywechat-gui-windows-日期-短SHA` 的压缩包
+5. 解压后将整个 `pywechat-gui` 目录发给 Windows 用户使用
+
+仓库地址：
+- `https://github.com/geraldpeng6/pywechat-gui`
 
 说明：
 - GUI 只面向 `pyweixin`，不兼容旧版 `pywechat`

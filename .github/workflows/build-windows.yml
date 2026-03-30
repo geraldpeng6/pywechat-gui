@@ -29,6 +29,13 @@ jobs:
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
+      - name: Prepare artifact metadata
+        shell: pwsh
+        run: |
+          $date = Get-Date -Format "yyyyMMdd"
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          "ARTIFACT_BASENAME=pywechat-gui-windows-$date-$shortSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Install GUI build dependencies
         run: pip install .[dev-gui]
 
@@ -41,13 +48,13 @@ jobs:
       - name: Archive build output
         shell: pwsh
         run: |
-          $artifact = "dist/pywechat-gui-windows.zip"
+          $artifact = "dist/$env:ARTIFACT_BASENAME.zip"
           if (Test-Path $artifact) { Remove-Item $artifact -Force }
           Compress-Archive -Path "dist/pywechat-gui/*" -DestinationPath $artifact
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pywechat-gui-windows
-          path: dist/pywechat-gui-windows.zip
+          name: ${{ env.ARTIFACT_BASENAME }}
+          path: dist/${{ env.ARTIFACT_BASENAME }}.zip
           if-no-files-found: error
