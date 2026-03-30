@@ -39,16 +39,18 @@ def headers_for(task_type: TaskType) -> list[str]:
     return MESSAGE_HEADERS if task_type is TaskType.MESSAGE else FILE_HEADERS
 
 
-def _load_csv_rows(path: Path) -> list[dict[str, Any]]:
+def _decode_text_file(path: Path, encodings: tuple[str, ...] = ("utf-8-sig", "gbk")) -> str:
     raw = path.read_bytes()
-    for encoding in ("utf-8-sig", "gbk"):
+    for encoding in encodings:
         try:
-            text = raw.decode(encoding)
-            break
+            return raw.decode(encoding)
         except UnicodeDecodeError:
             continue
-    else:
-        raise UnicodeDecodeError("csv", raw, 0, 1, "无法识别 CSV 编码")
+    raise UnicodeDecodeError("text", raw, 0, 1, "无法识别文件编码")
+
+
+def _load_csv_rows(path: Path) -> list[dict[str, Any]]:
+    text = _decode_text_file(path)
     reader = csv.DictReader(text.splitlines())
     return [dict(row) for row in reader]
 
@@ -81,24 +83,58 @@ def load_rows(task_type: TaskType, path: str | Path) -> list[MessageBatchRow] | 
     return [FileBatchRow.from_mapping(row) for row in rows]
 
 
-def dump_rows(task_type: TaskType, rows: list[dict[str, Any]], path: str | Path) -> None:
+def dump_table(headers: list[str], rows: list[dict[str, Any]], path: str | Path) -> None:
     file_path = Path(path)
-    header = headers_for(task_type)
     if file_path.suffix.lower() == ".csv":
         with file_path.open("w", encoding="utf-8-sig", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=header)
+            writer = csv.DictWriter(handle, fieldnames=headers)
             writer.writeheader()
             for row in rows:
-                writer.writerow({key: row.get(key, "") for key in header})
+                writer.writerow({key: row.get(key, "") for key in headers})
         return
     if file_path.suffix.lower() == ".xlsx":
         if Workbook is None:
             raise RuntimeError("未安装 openpyxl，无法导出 .xlsx 文件")
         workbook = Workbook()
         sheet = workbook.active
-        sheet.append(header)
+        sheet.append(headers)
         for row in rows:
-            sheet.append([row.get(key, "") for key in header])
+            sheet.append([row.get(key, "") for key in headers])
         workbook.save(file_path)
         return
     raise ValueError("仅支持导出 .csv 或 .xlsx 文件")
+
+
+def dump_rows(task_type: TaskType, rows: list[dict[str, Any]], path: str | Path) -> None:
+    dump_table(headers_for(task_type), rows, path)
+
+
+def load_session_names(path: str | Path) -> list[str]:
+    file_path = Path(path)
+    suffix = file_path.suffix.lower()
+    if suffix == ".txt":
+        text = _decode_text_file(file_path)
+        return [line.strip() for line in text.splitlines() if line.strip()]
+    if suffix == ".csv":
+        rows = _load_csv_rows(file_path)
+        return _extract_session_names(rows)
+    if suffix == ".xlsx":
+        rows = _load_xlsx_rows(file_path)
+        return _extract_session_names(rows)
+    raise ValueError("会话名单仅支持导入 .txt、.csv 或 .xlsx 文件")
+
+
+def _extract_session_names(rows: list[dict[str, Any]]) -> list[str]:
+    if not rows:
+        return []
+    first_row = rows[0]
+    if "session_name" in first_row:
+        return [str(row.get("session_name", "")).strip() for row in rows if str(row.get("session_name", "")).strip()]
+    values: list[str] = []
+    for row in rows:
+        for value in row.values():
+            text = str(value or "").strip()
+            if text:
+                values.append(text)
+                break
+    return values

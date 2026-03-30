@@ -369,6 +369,59 @@ class ExportHistoryRecord:
     created_at: str | None = None
 
 
+@dataclass
+class SessionScanRequest:
+    chatted_only: bool = False
+    no_official: bool = True
+
+
+@dataclass
+class SessionSummaryRow:
+    session_name: str
+    last_time: str = ""
+    last_message: str = ""
+
+
+@dataclass
+class SessionScanResult:
+    rows: list[SessionSummaryRow] = field(default_factory=list)
+
+
+@dataclass
+class GroupSummaryRow:
+    group_name: str
+    member_count: str = ""
+
+
+@dataclass
+class GroupScanResult:
+    rows: list[GroupSummaryRow] = field(default_factory=list)
+
+
+@dataclass
+class GroupMembersRequest:
+    group_name: str
+
+    def validate(self) -> dict[str, str]:
+        if not self.group_name.strip():
+            return {"group_name": "请先填写群聊名称"}
+        return {}
+
+
+@dataclass
+class GroupMemberRow:
+    group_name: str
+    alias: str = ""
+    nickname: str = ""
+
+
+@dataclass
+class GroupMembersResult:
+    group_name: str
+    member_count: int
+    rows: list[GroupMemberRow] = field(default_factory=list)
+
+
 def dataclass_to_json(items: list[MessageBatchRow] | list[FileBatchRow]) -> str:
     return json.dumps([asdict(item) for item in items], ensure_ascii=False)
 

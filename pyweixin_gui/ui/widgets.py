@@ -7,7 +7,9 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFileDialog,
+    QFormLayout,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QHeaderView,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -26,8 +29,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..import_export import dump_rows, load_rows
-from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, MessageBatchRow, ResourceExportKind, ResourceExportRequest, TaskType, clone_row
+from ..import_export import dump_rows, dump_table, load_rows, load_session_names
+from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupMemberRow, GroupMembersRequest, GroupSummaryRow, MessageBatchRow, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row
 
 
 @dataclass
@@ -801,12 +804,13 @@ class ExportPage(QWidget):
         toolbar = QHBoxLayout()
         for text, callback in [
             ("示例填充", self._load_example),
+            ("导入会话名单", self._import_session_names),
             ("一键导出", self._request_export),
             ("批量导出会话", self._request_batch_export),
             ("停止", self.stop_requested.emit),
         ]:
             button = QPushButton(text)
-            if text in {"示例填充", "批量导出会话"}:
+            if text in {"示例填充", "批量导出会话", "导入会话名单"}:
                 button.setProperty("variant", "ghost")
             if text == "停止":
                 button.setProperty("variant", "secondary")
@@ -883,6 +887,41 @@ class ExportPage(QWidget):
         self.session_names_input.setPlainText("项目群\n客户群A\n内部通知群")
         self.summary_label.setText("已填入示例会话名称，你可以直接改成自己的群名或好友备注。")
 
+    def _import_session_names(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "导入会话名单", "", "文本或表格 (*.txt *.csv *.xlsx)")
+        if not path:
+            return
+        try:
+            names = load_session_names(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "导入会话名单失败", str(exc))
+            return
+        if not names:
+            QMessageBox.information(self, "导入会话名单", "文件里没有识别到可用的会话名称。")
+            return
+        self.session_names_input.setPlainText("\n".join(names))
+        self.summary_label.setText(f"已导入 {len(names)} 个会话名称。")
+
+    def apply_single_request(self, request: ChatExportRequest) -> None:
+        self.session_name_input.setText(request.session_name)
+        self.target_folder_input.setText(request.target_folder)
+        self.export_messages_checkbox.setChecked(request.export_messages)
+        self.export_files_checkbox.setChecked(request.export_files)
+        self.export_images_checkbox.setChecked(request.export_images)
+        self.message_limit_spin.setValue(request.message_limit)
+        self.file_limit_spin.setValue(request.file_limit)
+        self.summary_label.setText("已回填上次导出参数。确认无误后可重新执行。")
+
+    def apply_batch_request(self, request: ChatBatchExportRequest) -> None:
+        self.session_names_input.setPlainText("\n".join(request.session_names))
+        self.target_folder_input.setText(request.target_folder)
+        self.export_messages_checkbox.setChecked(request.export_messages)
+        self.export_files_checkbox.setChecked(request.export_files)
+        self.export_images_checkbox.setChecked(request.export_images)
+        self.message_limit_spin.setValue(request.message_limit)
+        self.file_limit_spin.setValue(request.file_limit)
+        self.summary_label.setText("已回填批量导出参数。确认无误后可重新执行。")
+
     def set_running_state(self, is_running: bool) -> None:
         for name, button in self._buttons.items():
             if name == "停止":
@@ -908,8 +947,6 @@ class ResourceToolsPage(QWidget):
     stop_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
-        from PySide6.QtWidgets import QComboBox, QFormLayout, QSpinBox
-
         super().__init__(parent)
         self._buttons: dict[str, QPushButton] = {}
         layout = QVBoxLayout(self)
@@ -1013,6 +1050,15 @@ class ResourceToolsPage(QWidget):
         self.year_spin.setEnabled(show_year_month)
         self.month_spin.setEnabled(show_year_month)
 
+    def apply_request(self, request: ResourceExportRequest) -> None:
+        index = self.kind_combo.findData(request.export_kind)
+        if index >= 0:
+            self.kind_combo.setCurrentIndex(index)
+        self.target_folder_input.setText(request.target_folder)
+        self.year_spin.setValue(int(request.year))
+        self.month_spin.setValue(int(request.month) if request.month else 0)
+        self.summary_label.setText("已回填上次资源导出参数。确认无误后可重新执行。")
+
     def set_running_state(self, is_running: bool) -> None:
         for name, button in self._buttons.items():
             if name == "停止":
@@ -1024,6 +1070,273 @@ class ResourceToolsPage(QWidget):
         self.target_folder_input.setEnabled(not is_running)
         self.year_spin.setEnabled(not is_running and self.kind_combo.currentData() in {ResourceExportKind.WXFILES, ResourceExportKind.VIDEOS})
         self.month_spin.setEnabled(not is_running and self.kind_combo.currentData() in {ResourceExportKind.WXFILES, ResourceExportKind.VIDEOS})
+
+
+class SessionToolsPage(QWidget):
+    scan_sessions_requested = Signal(object)
+    scan_groups_requested = Signal()
+    load_group_members_requested = Signal(object)
+    use_session_names_requested = Signal(object)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._buttons: dict[str, QPushButton] = {}
+        layout = QVBoxLayout(self)
+
+        session_card = CardFrame("会话与群工具", hero=True)
+        intro = QLabel("把微信里已经存在的会话、群聊和群成员名单直接采集出来，减少手工抄名字的出错率。")
+        intro.setProperty("role", "pageSubtitle")
+        intro.setWordWrap(True)
+        session_card.body_layout.addWidget(intro)
+        helper = QLabel("适合做批量导出前的名单整理、群成员留档、交接核对。执行时同样会占用微信界面。")
+        helper.setProperty("role", "hint")
+        helper.setWordWrap(True)
+        session_card.body_layout.addWidget(helper)
+
+        session_options = QHBoxLayout()
+        self.chatted_only_checkbox = QCheckBox("只采集聊过天的会话")
+        self.no_official_checkbox = QCheckBox("自动排除公众号")
+        self.no_official_checkbox.setChecked(True)
+        session_options.addWidget(self.chatted_only_checkbox)
+        session_options.addWidget(self.no_official_checkbox)
+        session_options.addStretch(1)
+        session_card.body_layout.addLayout(session_options)
+
+        session_actions = QHBoxLayout()
+        self.scan_sessions_button = QPushButton("采集会话列表")
+        self.export_sessions_button = QPushButton("导出会话名单")
+        self.export_sessions_button.setProperty("variant", "secondary")
+        self.use_sessions_button = QPushButton("填入会话导出页")
+        self.use_sessions_button.setProperty("variant", "ghost")
+        for button in [self.scan_sessions_button, self.export_sessions_button, self.use_sessions_button]:
+            session_actions.addWidget(button)
+        session_actions.addStretch(1)
+        session_card.body_layout.addLayout(session_actions)
+
+        self.session_summary_label = QLabel("先采集一次会话列表，再把名单填入“会话导出”页面或导出成表格。")
+        self.session_summary_label.setProperty("role", "muted")
+        self.session_summary_label.setWordWrap(True)
+        session_card.body_layout.addWidget(self.session_summary_label)
+
+        self.session_table = QTableWidget(0, 3)
+        self.session_table.setHorizontalHeaderLabels(["会话名称", "最近时间", "最后一条消息"])
+        self.session_table.verticalHeader().setVisible(False)
+        self.session_table.horizontalHeader().setStretchLastSection(True)
+        self.session_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.session_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        session_card.body_layout.addWidget(self.session_table)
+        layout.addWidget(session_card)
+
+        group_card = CardFrame("群聊与成员")
+        group_toolbar = QHBoxLayout()
+        self.scan_groups_button = QPushButton("采集群聊列表")
+        self.export_groups_button = QPushButton("导出群聊名单")
+        self.export_groups_button.setProperty("variant", "secondary")
+        self.use_groups_button = QPushButton("群聊填入会话导出页")
+        self.use_groups_button.setProperty("variant", "ghost")
+        for button in [self.scan_groups_button, self.export_groups_button, self.use_groups_button]:
+            group_toolbar.addWidget(button)
+        group_toolbar.addStretch(1)
+        group_card.body_layout.addLayout(group_toolbar)
+
+        self.group_summary_label = QLabel("如果你记不清准确群名，可以先采集群聊列表，再直接回填到批量会话导出。")
+        self.group_summary_label.setProperty("role", "muted")
+        self.group_summary_label.setWordWrap(True)
+        group_card.body_layout.addWidget(self.group_summary_label)
+
+        self.group_table = QTableWidget(0, 2)
+        self.group_table.setHorizontalHeaderLabels(["群聊名称", "群人数"])
+        self.group_table.verticalHeader().setVisible(False)
+        self.group_table.horizontalHeader().setStretchLastSection(True)
+        self.group_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.group_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        group_card.body_layout.addWidget(self.group_table)
+
+        form = QFormLayout()
+        self.group_name_input = QLineEdit()
+        self.group_name_input.setPlaceholderText("填写要读取成员名单的群聊名称")
+        form.addRow("群聊名称", self.group_name_input)
+        group_card.body_layout.addLayout(form)
+
+        member_toolbar = QHBoxLayout()
+        self.load_members_button = QPushButton("读取群成员")
+        self.export_members_button = QPushButton("导出群成员名单")
+        self.export_members_button.setProperty("variant", "secondary")
+        member_toolbar.addWidget(self.load_members_button)
+        member_toolbar.addWidget(self.export_members_button)
+        member_toolbar.addStretch(1)
+        group_card.body_layout.addLayout(member_toolbar)
+
+        self.member_summary_label = QLabel("成员名单适合做通知范围确认、群运营交接和名单备份。")
+        self.member_summary_label.setProperty("role", "muted")
+        self.member_summary_label.setWordWrap(True)
+        group_card.body_layout.addWidget(self.member_summary_label)
+
+        self.member_table = QTableWidget(0, 3)
+        self.member_table.setHorizontalHeaderLabels(["群聊名称", "群昵称", "微信昵称/备注"])
+        self.member_table.verticalHeader().setVisible(False)
+        self.member_table.horizontalHeader().setStretchLastSection(True)
+        self.member_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.member_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        group_card.body_layout.addWidget(self.member_table)
+        layout.addWidget(group_card)
+
+        self.scan_sessions_button.clicked.connect(self._request_scan_sessions)
+        self.scan_groups_button.clicked.connect(lambda: self.scan_groups_requested.emit())
+        self.load_members_button.clicked.connect(self._request_group_members)
+        self.export_sessions_button.clicked.connect(self._export_session_rows)
+        self.export_groups_button.clicked.connect(self._export_group_rows)
+        self.export_members_button.clicked.connect(self._export_member_rows)
+        self.use_sessions_button.clicked.connect(lambda: self._emit_selected_names(self.session_table, 0))
+        self.use_groups_button.clicked.connect(lambda: self._emit_selected_names(self.group_table, 0))
+
+        self.export_sessions_button.setEnabled(False)
+        self.export_groups_button.setEnabled(False)
+        self.export_members_button.setEnabled(False)
+        self.use_sessions_button.setEnabled(False)
+        self.use_groups_button.setEnabled(False)
+        self.set_running_state(False)
+
+    def _request_scan_sessions(self) -> None:
+        self.scan_sessions_requested.emit(
+            SessionScanRequest(
+                chatted_only=self.chatted_only_checkbox.isChecked(),
+                no_official=self.no_official_checkbox.isChecked(),
+            )
+        )
+
+    def _request_group_members(self) -> None:
+        request = GroupMembersRequest(group_name=self.group_name_input.text().strip())
+        errors = request.validate()
+        if errors:
+            QMessageBox.warning(self, "群成员名单", next(iter(errors.values())))
+            self.member_summary_label.setText("群聊名称为空，请先填写后再读取成员名单。")
+            return
+        self.load_group_members_requested.emit(request)
+
+    def set_session_rows(self, rows: list[SessionSummaryRow]) -> None:
+        self.session_table.setRowCount(0)
+        for row_index, row in enumerate(rows):
+            self.session_table.insertRow(row_index)
+            self.session_table.setItem(row_index, 0, QTableWidgetItem(row.session_name))
+            self.session_table.setItem(row_index, 1, QTableWidgetItem(row.last_time))
+            self.session_table.setItem(row_index, 2, QTableWidgetItem(row.last_message))
+        self.session_table.resizeColumnsToContents()
+        self.export_sessions_button.setEnabled(bool(rows))
+        self.use_sessions_button.setEnabled(bool(rows))
+        self.session_summary_label.setText(f"已采集 {len(rows)} 个会话，可直接导出名单或回填到会话导出页。")
+
+    def set_group_rows(self, rows: list[GroupSummaryRow]) -> None:
+        self.group_table.setRowCount(0)
+        for row_index, row in enumerate(rows):
+            self.group_table.insertRow(row_index)
+            self.group_table.setItem(row_index, 0, QTableWidgetItem(row.group_name))
+            self.group_table.setItem(row_index, 1, QTableWidgetItem(row.member_count))
+        self.group_table.resizeColumnsToContents()
+        self.export_groups_button.setEnabled(bool(rows))
+        self.use_groups_button.setEnabled(bool(rows))
+        self.group_summary_label.setText(f"已采集 {len(rows)} 个群聊，可直接导出群聊名单或回填到会话导出页。")
+
+    def set_group_members(self, group_name: str, rows: list[GroupMemberRow]) -> None:
+        self.group_name_input.setText(group_name)
+        self.member_table.setRowCount(0)
+        for row_index, row in enumerate(rows):
+            self.member_table.insertRow(row_index)
+            self.member_table.setItem(row_index, 0, QTableWidgetItem(row.group_name))
+            self.member_table.setItem(row_index, 1, QTableWidgetItem(row.alias))
+            self.member_table.setItem(row_index, 2, QTableWidgetItem(row.nickname))
+        self.member_table.resizeColumnsToContents()
+        self.export_members_button.setEnabled(bool(rows))
+        self.member_summary_label.setText(f"已读取 {group_name} 的 {len(rows)} 位成员，可直接导出名单。")
+
+    def set_running_state(self, is_running: bool) -> None:
+        for widget in [
+            self.chatted_only_checkbox,
+            self.no_official_checkbox,
+            self.scan_sessions_button,
+            self.scan_groups_button,
+            self.load_members_button,
+            self.group_name_input,
+        ]:
+            widget.setEnabled(not is_running)
+        if is_running:
+            self.export_sessions_button.setEnabled(False)
+            self.export_groups_button.setEnabled(False)
+            self.export_members_button.setEnabled(False)
+            self.use_sessions_button.setEnabled(False)
+            self.use_groups_button.setEnabled(False)
+        else:
+            self.export_sessions_button.setEnabled(self.session_table.rowCount() > 0)
+            self.export_groups_button.setEnabled(self.group_table.rowCount() > 0)
+            self.export_members_button.setEnabled(self.member_table.rowCount() > 0)
+            self.use_sessions_button.setEnabled(self.session_table.rowCount() > 0)
+            self.use_groups_button.setEnabled(self.group_table.rowCount() > 0)
+
+    def selected_session_names(self) -> list[str]:
+        return self._selected_names(self.session_table, 0)
+
+    def selected_group_names(self) -> list[str]:
+        return self._selected_names(self.group_table, 0)
+
+    def _selected_names(self, table: QTableWidget, column_index: int) -> list[str]:
+        rows = sorted({item.row() for item in table.selectedItems()})
+        if not rows:
+            rows = list(range(table.rowCount()))
+        names: list[str] = []
+        for row in rows:
+            item = table.item(row, column_index)
+            text = item.text().strip() if item else ""
+            if text:
+                names.append(text)
+        return names
+
+    def _emit_selected_names(self, table: QTableWidget, column_index: int) -> None:
+        names = self._selected_names(table, column_index)
+        if not names:
+            QMessageBox.information(self, "会话与群工具", "当前没有可回填的名称。")
+            return
+        self.use_session_names_requested.emit(names)
+
+    def _export_session_rows(self) -> None:
+        rows = [
+            {
+                "会话名称": self.session_table.item(row, 0).text() if self.session_table.item(row, 0) else "",
+                "最近时间": self.session_table.item(row, 1).text() if self.session_table.item(row, 1) else "",
+                "最后一条消息": self.session_table.item(row, 2).text() if self.session_table.item(row, 2) else "",
+            }
+            for row in range(self.session_table.rowCount())
+        ]
+        self._export_generic_rows("导出会话名单", ["会话名称", "最近时间", "最后一条消息"], rows)
+
+    def _export_group_rows(self) -> None:
+        rows = [
+            {
+                "群聊名称": self.group_table.item(row, 0).text() if self.group_table.item(row, 0) else "",
+                "群人数": self.group_table.item(row, 1).text() if self.group_table.item(row, 1) else "",
+            }
+            for row in range(self.group_table.rowCount())
+        ]
+        self._export_generic_rows("导出群聊名单", ["群聊名称", "群人数"], rows)
+
+    def _export_member_rows(self) -> None:
+        rows = [
+            {
+                "群聊名称": self.member_table.item(row, 0).text() if self.member_table.item(row, 0) else "",
+                "群昵称": self.member_table.item(row, 1).text() if self.member_table.item(row, 1) else "",
+                "微信昵称/备注": self.member_table.item(row, 2).text() if self.member_table.item(row, 2) else "",
+            }
+            for row in range(self.member_table.rowCount())
+        ]
+        self._export_generic_rows("导出群成员名单", ["群聊名称", "群昵称", "微信昵称/备注"], rows)
+
+    def _export_generic_rows(self, title: str, headers: list[str], rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            QMessageBox.information(self, title, "当前没有可导出的数据。")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, title, "", "Excel (*.xlsx);;CSV (*.csv)")
+        if not path:
+            return
+        dump_table(headers, rows, path)
 
 
 class TemplatesPage(QWidget):
@@ -1110,6 +1423,8 @@ class TemplatesPage(QWidget):
 class ExportHistoryPage(QWidget):
     open_folder_requested = Signal()
     open_summary_requested = Signal()
+    rerun_requested = Signal()
+    retry_failed_requested = Signal()
     clear_history_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
@@ -1123,11 +1438,17 @@ class ExportHistoryPage(QWidget):
         self.open_folder_button.setProperty("variant", "secondary")
         self.open_summary_button = QPushButton("打开摘要")
         self.open_summary_button.setProperty("variant", "ghost")
+        self.rerun_button = QPushButton("重新执行")
+        self.rerun_button.setProperty("variant", "secondary")
+        self.retry_failed_button = QPushButton("仅重试失败会话")
+        self.retry_failed_button.setProperty("variant", "ghost")
         self.clear_button = QPushButton("清理导出历史")
         self.clear_button.setProperty("variant", "secondary")
         toolbar.addWidget(self.search_input)
         toolbar.addWidget(self.open_folder_button)
         toolbar.addWidget(self.open_summary_button)
+        toolbar.addWidget(self.rerun_button)
+        toolbar.addWidget(self.retry_failed_button)
         toolbar.addWidget(self.clear_button)
         card.body_layout.addLayout(toolbar)
         self.summary_label = QLabel("最近的会话导出和资源导出都会记录在这里，方便回看和重新打开目录。")
@@ -1149,6 +1470,8 @@ class ExportHistoryPage(QWidget):
 
         self.open_folder_button.setEnabled(False)
         self.open_summary_button.setEnabled(False)
+        self.rerun_button.setEnabled(False)
+        self.retry_failed_button.setEnabled(False)
 
 
 class HistoryPage(QWidget):

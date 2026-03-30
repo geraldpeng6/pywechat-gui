@@ -35,6 +35,14 @@ git clone https://github.com/Hello-Mr-Crab/pywechat.git
 - 模板中心、执行历史、失败项重试
 - GUI 设置页与运行日志
 
+对外发给普通用户时，推荐只提供一个安装包：
+- `pywechat-gui-setup-版本.exe`
+- 用户双击安装即可，不需要 Python、pip 或任何额外依赖
+
+推荐发布方式：
+- 日常测试构建：GitHub Actions 产出 `zip + 安装包 exe`
+- 正式对外发布：打 `v1.0.0` 这类 tag，自动生成 GitHub Release，并上传安装包 exe
+
 安装 GUI 依赖：
 ```
 pip install .[gui]
@@ -50,24 +58,41 @@ python -m pyweixin_gui
 pywechat-gui
 ```
 
-Windows onedir 打包：
+Windows 本地构建：
 ```
 pip install .[dev-gui]
 pyinstaller pyweixin_gui.spec
 ```
 
 GitHub Actions 自动打包：
-- 已提供 Windows 自动打包工作流：`.github/workflows/build-windows.yml`
-- 推送到 `main` 或手动触发后，会自动生成带日期和短 SHA 的 Windows 包
-  例如：`pywechat-gui-windows-20260330-abcdef1.zip`
-- 可在 GitHub Actions 的运行产物里直接下载
+- `.github/workflows/build-windows.yml`
+- 推送到 `main` 或手动触发后，会自动生成两类产物：
+- `pywechat-gui-setup-日期-短SHA.exe`
+- `pywechat-gui-windows-日期-短SHA.zip`
+
+GitHub Release 自动发布：
+- `.github/workflows/release-windows-installer.yml`
+- 推送 tag，如 `v1.0.0`
+- 会自动创建 Release，并上传：
+- `pywechat-gui-setup-1.0.0.exe`
+- `pywechat-gui-windows-1.0.0.zip`
 
 下载步骤：
 1. 打开仓库的 `Actions` 页面
 2. 点击最近一次成功的 `Build Windows Package`
 3. 在页面底部找到 `Artifacts`
-4. 下载名为 `pywechat-gui-windows-日期-短SHA` 的压缩包
-5. 解压后将整个 `pywechat-gui` 目录发给 Windows 用户使用
+4. 优先下载名为 `pywechat-gui-setup-日期-短SHA` 的安装包
+5. Windows 用户双击安装包 exe 即可
+
+正式发布下载步骤：
+1. 打开仓库的 `Releases` 页面
+2. 下载最新版本里的 `pywechat-gui-setup-版本.exe`
+3. Windows 用户双击安装
+
+注意：
+- 普通用户不要接触源码目录
+- 普通用户优先使用安装包 exe
+- `zip` 更适合测试或便携运行
 
 仓库地址：
 - `https://github.com/geraldpeng6/pywechat-gui`

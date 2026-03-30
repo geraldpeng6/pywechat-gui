@@ -9,7 +9,7 @@ workspace = Path(globals().get("SPECPATH", Path.cwd())).resolve()
 block_cipher = None
 
 a = Analysis(
-    ['pyweixin_gui/__main__.py'],
+    ['pyweixin_gui/app.py'],
     pathex=[str(workspace)],
     binaries=[],
     datas=[],

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pyweixin_gui.import_export import dump_rows, load_rows
+from pyweixin_gui.import_export import dump_rows, dump_table, load_rows, load_session_names
 from pyweixin_gui.models import TaskType
 
 
@@ -49,6 +49,20 @@ class ImportExportTestCase(unittest.TestCase):
             loaded = load_rows(TaskType.FILE, path)
             self.assertEqual(loaded[0].session_name, "群聊A")
             self.assertTrue(loaded[0].with_message)
+
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl not installed")
+    def test_load_session_names_from_xlsx(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "sessions.xlsx"
+            dump_table(
+                ["session_name", "remark"],
+                [
+                    {"session_name": "项目群", "remark": "A"},
+                    {"session_name": "客户群", "remark": "B"},
+                ],
+                path,
+            )
+            self.assertEqual(load_session_names(path), ["项目群", "客户群"])
 
 
 if __name__ == "__main__":
