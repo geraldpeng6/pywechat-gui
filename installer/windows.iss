@@ -15,7 +15,7 @@
   #define MyOutputBaseFilename "pywechat-gui-setup"
 #endif
 #ifndef MySourceDir
-  #define MySourceDir "dist\pywechat-gui"
+  #define MySourceDir "..\dist\pywechat-gui"
 #endif
 
 [Setup]
@@ -29,8 +29,8 @@ AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\PyWeChat GUI
 DefaultGroupName=PyWeChat GUI
 UninstallDisplayIcon={app}\{#MyAppExeName}
-LicenseFile=LICENSE
-OutputDir=dist
+LicenseFile=..\LICENSE
+OutputDir=..\dist
 OutputBaseFilename={#MyOutputBaseFilename}
 Compression=lzma
 SolidCompression=yes

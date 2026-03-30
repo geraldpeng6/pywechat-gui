@@ -54,10 +54,11 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
+          $sourceDir = Join-Path $env:GITHUB_WORKSPACE "dist\pywechat-gui"
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
             "/DMyAppVersion=$env:APP_VERSION" `
             "/DMyOutputBaseFilename=$env:INSTALLER_BASENAME" `
-            "/DMySourceDir=dist\pywechat-gui" `
+            "/DMySourceDir=$sourceDir" `
             "installer\windows.iss"
 
       - name: Archive build output
