@@ -76,6 +76,26 @@ class CardFrame(QFrame):
         self.body_layout = layout
 
 
+def _compact_row(*widgets: QWidget, stretch_last: bool = True) -> QWidget:
+    container = QWidget()
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(8)
+    for index, widget in enumerate(widgets):
+        if stretch_last and index == len(widgets) - 1:
+            layout.addWidget(widget, 1)
+        else:
+            layout.addWidget(widget)
+    if not stretch_last:
+        layout.addStretch(1)
+    return container
+
+
+def _set_compact_width(widget: QWidget, width: int) -> None:
+    widget.setMinimumWidth(width)
+    widget.setMaximumWidth(width)
+
+
 class BatchTableWidget(QTableWidget):
     def __init__(self, task_type: TaskType, parent: QWidget | None = None):
         super().__init__(parent)
@@ -524,7 +544,6 @@ class BatchPage(QWidget):
         required_hint.setProperty("role", "warn")
         required_hint.setWordWrap(True)
         card.body_layout.addWidget(required_hint)
-        toolbar = QHBoxLayout()
         button_specs = [
             ("新增行", self._add_row),
             ("载入示例", self._load_example_rows),
@@ -552,17 +571,25 @@ class BatchPage(QWidget):
                 ("停止", self.stop_requested.emit),
             ]
         )
-        for text, callback in button_specs:
-            button = QPushButton(text)
-            if text in {"删除选中", "停止", "保存模板", "加载模板", "清空表格"}:
-                button.setProperty("variant", "secondary")
-            if text in {"载入示例", "导入", "导出当前", "导出模板", "复制上一行", "套用当前值", "批量填写当前列"}:
-                button.setProperty("variant", "ghost")
-            toolbar.addWidget(button)
-            self._buttons[text] = button
-            button.clicked.connect(lambda _checked=False, cb=callback: cb())
-        toolbar.addStretch(1)
-        card.body_layout.addLayout(toolbar)
+        toolbar_rows: list[list[tuple[str, Any]]] = [
+            button_specs[:8],
+            button_specs[8:14],
+            button_specs[14:],
+        ]
+        for row_specs in toolbar_rows:
+            toolbar = QHBoxLayout()
+            toolbar.setSpacing(8)
+            for text, callback in row_specs:
+                button = QPushButton(text)
+                if text in {"删除选中", "停止", "保存模板", "加载模板", "清空表格"}:
+                    button.setProperty("variant", "secondary")
+                if text in {"载入示例", "导入", "导出当前", "导出模板", "复制上一行", "套用当前值", "批量填写当前列"}:
+                    button.setProperty("variant", "ghost")
+                toolbar.addWidget(button)
+                self._buttons[text] = button
+                button.clicked.connect(lambda _checked=False, cb=callback: cb())
+            toolbar.addStretch(1)
+            card.body_layout.addLayout(toolbar)
         self.table = BatchTableWidget(task_type)
         card.body_layout.addWidget(self.table)
         self.summary_label = QLabel("准备就绪")
@@ -765,14 +792,17 @@ class ExportPage(QWidget):
 
         form = QFormLayout()
         form.setSpacing(14)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self.session_name_input = QLineEdit()
         self.session_name_input.setPlaceholderText("填写微信群名、好友备注或会话名称")
         self.session_names_input = QTextEdit()
         self.session_names_input.setPlaceholderText("批量导出时，每行填写一个会话名称，例如：\n项目群\n客户A\n财务群")
+        self.session_names_input.setMinimumHeight(96)
         self.target_folder_input = QLineEdit()
         self.target_folder_input.setPlaceholderText("选择导出目录")
         self.choose_folder_button = QPushButton("选择文件夹")
         self.choose_folder_button.setProperty("variant", "ghost")
+        self.choose_folder_button.setMinimumWidth(104)
         target_row = QHBoxLayout()
         target_row.addWidget(self.target_folder_input)
         target_row.addWidget(self.choose_folder_button)
@@ -787,18 +817,41 @@ class ExportPage(QWidget):
         self.message_limit_spin = QSpinBox()
         self.message_limit_spin.setRange(1, 5000)
         self.message_limit_spin.setValue(100)
+        _set_compact_width(self.message_limit_spin, 128)
         self.file_limit_spin = QSpinBox()
         self.file_limit_spin.setRange(1, 5000)
         self.file_limit_spin.setValue(50)
+        _set_compact_width(self.file_limit_spin, 128)
+
+        count_row = QWidget()
+        count_layout = QHBoxLayout(count_row)
+        count_layout.setContentsMargins(0, 0, 0, 0)
+        count_layout.setSpacing(16)
+        message_limit_label = QLabel("消息条数")
+        message_limit_label.setProperty("role", "muted")
+        file_limit_label = QLabel("文件数量")
+        file_limit_label.setProperty("role", "muted")
+        count_layout.addWidget(message_limit_label)
+        count_layout.addWidget(self.message_limit_spin)
+        count_layout.addSpacing(12)
+        count_layout.addWidget(file_limit_label)
+        count_layout.addWidget(self.file_limit_spin)
+        count_layout.addStretch(1)
+
+        scope_row = QWidget()
+        scope_layout = QHBoxLayout(scope_row)
+        scope_layout.setContentsMargins(0, 0, 0, 0)
+        scope_layout.setSpacing(18)
+        scope_layout.addWidget(self.export_messages_checkbox)
+        scope_layout.addWidget(self.export_files_checkbox)
+        scope_layout.addWidget(self.export_images_checkbox)
+        scope_layout.addStretch(1)
 
         form.addRow("会话名称", self.session_name_input)
         form.addRow("批量会话", self.session_names_input)
         form.addRow("导出目录", target_row)
-        form.addRow("消息条数", self.message_limit_spin)
-        form.addRow("文件数量", self.file_limit_spin)
-        form.addRow("导出文本", self.export_messages_checkbox)
-        form.addRow("导出文件", self.export_files_checkbox)
-        form.addRow("图片/视频", self.export_images_checkbox)
+        form.addRow("导出数量", count_row)
+        form.addRow("导出范围", scope_row)
         card.body_layout.addLayout(form)
 
         toolbar = QHBoxLayout()
@@ -970,20 +1023,36 @@ class ResourceToolsPage(QWidget):
         self.target_folder_input.setPlaceholderText("选择导出目录")
         self.choose_folder_button = QPushButton("选择文件夹")
         self.choose_folder_button.setProperty("variant", "ghost")
+        self.choose_folder_button.setMinimumWidth(104)
         target_row = QHBoxLayout()
         target_row.addWidget(self.target_folder_input)
         target_row.addWidget(self.choose_folder_button)
         self.year_spin = QSpinBox()
         self.year_spin.setRange(2020, 2100)
         self.year_spin.setValue(2026)
+        _set_compact_width(self.year_spin, 120)
         self.month_spin = QSpinBox()
         self.month_spin.setRange(0, 12)
         self.month_spin.setSpecialValueText("全部月份")
         self.month_spin.setValue(0)
+        _set_compact_width(self.month_spin, 120)
+        time_row = QWidget()
+        time_layout = QHBoxLayout(time_row)
+        time_layout.setContentsMargins(0, 0, 0, 0)
+        time_layout.setSpacing(16)
+        year_label = QLabel("年份")
+        year_label.setProperty("role", "muted")
+        month_label = QLabel("月份")
+        month_label.setProperty("role", "muted")
+        time_layout.addWidget(year_label)
+        time_layout.addWidget(self.year_spin)
+        time_layout.addSpacing(12)
+        time_layout.addWidget(month_label)
+        time_layout.addWidget(self.month_spin)
+        time_layout.addStretch(1)
         form.addRow("导出类型", self.kind_combo)
         form.addRow("导出目录", target_row)
-        form.addRow("年份", self.year_spin)
-        form.addRow("月份", self.month_spin)
+        form.addRow("时间范围", time_row)
         card.body_layout.addLayout(form)
 
         toolbar = QHBoxLayout()
@@ -2001,27 +2070,82 @@ class SettingsPage(QWidget):
         self.clear = QCheckBox("发送前清空输入区")
         self.search_pages = QSpinBox()
         self.search_pages.setRange(0, 50)
+        _set_compact_width(self.search_pages, 120)
         self.send_delay = QDoubleSpinBox()
         self.send_delay.setRange(0.0, 10.0)
         self.send_delay.setSingleStep(0.1)
+        _set_compact_width(self.send_delay, 120)
         self.window_width = QSpinBox()
         self.window_width.setRange(960, 3840)
+        _set_compact_width(self.window_width, 120)
         self.window_height = QSpinBox()
         self.window_height.setRange(720, 2160)
+        _set_compact_width(self.window_height, 120)
         self.import_encoding = QComboBox()
         self.import_encoding.addItems(["auto", "utf-8-sig", "gbk"])
+        _set_compact_width(self.import_encoding, 150)
         self.theme = QComboBox()
         self.theme.addItems(["light"])
+        _set_compact_width(self.theme, 150)
 
-        form.addRow("窗口最大化", self.is_maximize)
-        form.addRow("完成后关闭微信", self.close_weixin)
-        form.addRow("清空输入框", self.clear)
-        form.addRow("搜索页数", self.search_pages)
-        form.addRow("发送间隔(秒)", self.send_delay)
-        form.addRow("默认窗口宽度", self.window_width)
-        form.addRow("默认窗口高度", self.window_height)
-        form.addRow("CSV 编码", self.import_encoding)
-        form.addRow("主题", self.theme)
+        behavior_row = QWidget()
+        behavior_layout = QHBoxLayout(behavior_row)
+        behavior_layout.setContentsMargins(0, 0, 0, 0)
+        behavior_layout.setSpacing(18)
+        behavior_layout.addWidget(self.is_maximize)
+        behavior_layout.addWidget(self.close_weixin)
+        behavior_layout.addWidget(self.clear)
+        behavior_layout.addStretch(1)
+
+        runtime_row = QWidget()
+        runtime_layout = QHBoxLayout(runtime_row)
+        runtime_layout.setContentsMargins(0, 0, 0, 0)
+        runtime_layout.setSpacing(16)
+        search_label = QLabel("搜索页数")
+        search_label.setProperty("role", "muted")
+        delay_label = QLabel("发送间隔(秒)")
+        delay_label.setProperty("role", "muted")
+        runtime_layout.addWidget(search_label)
+        runtime_layout.addWidget(self.search_pages)
+        runtime_layout.addSpacing(12)
+        runtime_layout.addWidget(delay_label)
+        runtime_layout.addWidget(self.send_delay)
+        runtime_layout.addStretch(1)
+
+        size_row = QWidget()
+        size_layout = QHBoxLayout(size_row)
+        size_layout.setContentsMargins(0, 0, 0, 0)
+        size_layout.setSpacing(16)
+        width_label = QLabel("宽度")
+        width_label.setProperty("role", "muted")
+        height_label = QLabel("高度")
+        height_label.setProperty("role", "muted")
+        size_layout.addWidget(width_label)
+        size_layout.addWidget(self.window_width)
+        size_layout.addSpacing(12)
+        size_layout.addWidget(height_label)
+        size_layout.addWidget(self.window_height)
+        size_layout.addStretch(1)
+
+        misc_row = QWidget()
+        misc_layout = QHBoxLayout(misc_row)
+        misc_layout.setContentsMargins(0, 0, 0, 0)
+        misc_layout.setSpacing(16)
+        encoding_label = QLabel("CSV 编码")
+        encoding_label.setProperty("role", "muted")
+        theme_label = QLabel("主题")
+        theme_label.setProperty("role", "muted")
+        misc_layout.addWidget(encoding_label)
+        misc_layout.addWidget(self.import_encoding)
+        misc_layout.addSpacing(12)
+        misc_layout.addWidget(theme_label)
+        misc_layout.addWidget(self.theme)
+        misc_layout.addStretch(1)
+
+        form.addRow("执行行为", behavior_row)
+        form.addRow("发送设置", runtime_row)
+        form.addRow("窗口大小", size_row)
+        form.addRow("其他设置", misc_row)
         card.body_layout.addLayout(form)
         self.save_button = QPushButton("保存设置")
         card.body_layout.addWidget(self.save_button)

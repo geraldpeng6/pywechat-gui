@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -91,6 +91,7 @@ class MainWindow(QMainWindow):
         self.nav.setObjectName("SideNav")
         self.nav.setFixedWidth(200)
         self.nav.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.nav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.stack = QStackedWidget()
 
         splitter.addWidget(self.nav)
