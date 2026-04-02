@@ -36,6 +36,13 @@ class ModelsTestCase(unittest.TestCase):
         payload = relay_template_to_json(
             source_session="上游A",
             package_name="测试任务",
+            collect_settings={
+                "message_limit": 36,
+                "file_limit": 18,
+                "collect_mode": RelayCollectMode.PERIOD,
+                "recent_range": RelayRecentRange.WEEK,
+                "sender_names": "张三|李四",
+            },
             package_rows=[
                 RelayPackageRow(sequence=1, item_type=RelayItemType.TEXT, content="你好"),
                 RelayPackageRow(sequence=2, item_type=RelayItemType.FILE, content="报价单.pdf", file_path="C:/demo/报价单.pdf"),
@@ -45,9 +52,15 @@ class ModelsTestCase(unittest.TestCase):
         )
         loaded = relay_template_from_json(payload)
         package_rows = loaded["package_rows"]
+        collect_settings = loaded["collect_settings"]
         self.assertEqual(package_rows[0].item_type, RelayItemType.TEXT)
         self.assertEqual(package_rows[1].item_type, RelayItemType.FILE)
         self.assertEqual(package_rows[2].item_type, RelayItemType.IMAGE)
+        self.assertEqual(collect_settings["message_limit"], 36)
+        self.assertEqual(collect_settings["file_limit"], 18)
+        self.assertEqual(collect_settings["collect_mode"], RelayCollectMode.PERIOD)
+        self.assertEqual(collect_settings["recent_range"], RelayRecentRange.WEEK)
+        self.assertEqual(collect_settings["sender_names"], "张三|李四")
 
     def test_collect_text_request_accepts_period_mode(self):
         request = RelayCollectTextRequest(

@@ -40,6 +40,14 @@ def _parse_optional_float(value: Any) -> float | None:
     return float(value)
 
 
+def _parse_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
 def _normalize_text(value: Any) -> str:
     if value is None:
         return ""
@@ -744,10 +752,21 @@ def relay_template_to_json(
     package_name: str,
     package_rows: list[RelayPackageRow],
     route_rows: list[RelayRouteRow],
+    collect_settings: dict[str, Any] | None = None,
 ) -> str:
+    raw_collect_settings = collect_settings or {}
+    collect_mode = coerce_relay_collect_mode(raw_collect_settings.get("collect_mode", RelayCollectMode.COUNT.value))
+    recent_range = coerce_relay_recent_range(raw_collect_settings.get("recent_range", RelayRecentRange.TODAY.value))
     payload = {
         "source_session": source_session,
         "package_name": package_name,
+        "collect_settings": {
+            "message_limit": _parse_positive_int(raw_collect_settings.get("message_limit"), 20),
+            "file_limit": _parse_positive_int(raw_collect_settings.get("file_limit"), 10),
+            "collect_mode": collect_mode.value if isinstance(collect_mode, RelayCollectMode) else RelayCollectMode.COUNT.value,
+            "recent_range": recent_range.value if isinstance(recent_range, RelayRecentRange) else RelayRecentRange.TODAY.value,
+            "sender_names": _normalize_text(raw_collect_settings.get("sender_names")),
+        },
         "package_rows": [
             {
                 **asdict(row),
@@ -764,9 +783,21 @@ def relay_template_from_json(payload: str) -> dict[str, Any]:
     raw = json.loads(payload or "{}")
     if not isinstance(raw, dict):
         raw = {}
+    raw_collect_settings = raw.get("collect_settings", {})
+    if not isinstance(raw_collect_settings, dict):
+        raw_collect_settings = {}
+    collect_mode = coerce_relay_collect_mode(raw_collect_settings.get("collect_mode", RelayCollectMode.COUNT.value))
+    recent_range = coerce_relay_recent_range(raw_collect_settings.get("recent_range", RelayRecentRange.TODAY.value))
     return {
         "source_session": _normalize_text(raw.get("source_session")),
         "package_name": _normalize_text(raw.get("package_name")),
+        "collect_settings": {
+            "message_limit": _parse_positive_int(raw_collect_settings.get("message_limit"), 20),
+            "file_limit": _parse_positive_int(raw_collect_settings.get("file_limit"), 10),
+            "collect_mode": collect_mode if isinstance(collect_mode, RelayCollectMode) else RelayCollectMode.COUNT,
+            "recent_range": recent_range if isinstance(recent_range, RelayRecentRange) else RelayRecentRange.TODAY,
+            "sender_names": _normalize_text(raw_collect_settings.get("sender_names")),
+        },
         "package_rows": [RelayPackageRow.from_mapping(item) for item in raw.get("package_rows", []) if isinstance(item, dict)],
         "route_rows": [RelayRouteRow.from_mapping(item) for item in raw.get("route_rows", []) if isinstance(item, dict)],
     }

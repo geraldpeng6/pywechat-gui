@@ -7,6 +7,7 @@ from typing import Any
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent, QGuiApplication
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -34,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..import_export import dump_route_rows, dump_rows, dump_table, load_route_rows, load_rows, load_session_names
-from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectMediaRequest, RelayCollectMode, RelayCollectTextRequest, RelayItemType, RelayPackageExportRequest, RelayPackageRow, RelayRecentRange, RelayRouteRow, RelaySendRequest, RelayValidationRequest, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row, coerce_resource_export_kind
+from ..models import ChatBatchExportRequest, ChatExportRequest, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectMediaRequest, RelayCollectMode, RelayCollectTextRequest, RelayItemType, RelayPackageExportRequest, RelayPackageRow, RelayRecentRange, RelayRouteRow, RelaySendRequest, RelayValidationRequest, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row, coerce_relay_collect_mode, coerce_relay_recent_range, coerce_resource_export_kind
 
 
 @dataclass
@@ -84,6 +85,127 @@ class CardFrame(QFrame):
             label.setProperty("role", "sectionTitle")
             layout.addWidget(label)
         self.body_layout = layout
+
+
+class RemovableChip(QFrame):
+    remove_requested = Signal(str)
+
+    def __init__(self, text: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._text = text
+        self._locked = False
+        self.setObjectName("Chip")
+        self.setMouseTracking(True)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 6, 8, 6)
+        layout.setSpacing(6)
+        self.label = QLabel(text)
+        self.delete_button = QPushButton("❌")
+        self.delete_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.delete_button.setFixedSize(20, 20)
+        self.delete_button.setVisible(False)
+        self.delete_button.setStyleSheet(
+            "QPushButton { color: #dc2626; border: none; background: transparent; }"
+            "QPushButton:hover { background: #fee2e2; border-radius: 10px; }"
+        )
+        self.delete_button.clicked.connect(lambda: self.remove_requested.emit(self._text))
+        layout.addWidget(self.label)
+        layout.addWidget(self.delete_button)
+        self.setStyleSheet(
+            "#Chip { background: #f8fafc; border: 1px solid #dbe3ee; border-radius: 999px; }"
+        )
+
+    def enterEvent(self, event) -> None:  # type: ignore[override]
+        if self._locked:
+            return super().enterEvent(event)
+        self.delete_button.setVisible(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # type: ignore[override]
+        self.delete_button.setVisible(False)
+        super().leaveEvent(event)
+
+    def set_locked(self, locked: bool) -> None:
+        self._locked = locked
+        self.delete_button.setEnabled(not locked)
+        if locked:
+            self.delete_button.setVisible(False)
+
+
+class ChipListWidget(QWidget):
+    remove_requested = Signal(str)
+
+    def __init__(self, empty_text: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._empty_text = empty_text
+        self._values: list[str] = []
+        self._locked = False
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self.empty_label = QLabel(empty_text)
+        self.empty_label.setProperty("role", "muted")
+        self.empty_label.setWordWrap(True)
+        layout.addWidget(self.empty_label)
+        self.chip_container = QWidget()
+        self.chip_layout = FlowLayout(self.chip_container, margin=0, h_spacing=8, v_spacing=8)
+        layout.addWidget(self.chip_container)
+        self._refresh_state()
+
+    def values(self) -> list[str]:
+        return list(self._values)
+
+    def add_value(self, value: str) -> bool:
+        normalized = value.strip()
+        if not normalized or normalized in self._values:
+            return False
+        self._values.append(normalized)
+        chip = RemovableChip(normalized)
+        chip.remove_requested.connect(self.remove_requested.emit)
+        chip.set_locked(self._locked)
+        self.chip_layout.addWidget(chip)
+        self._refresh_state()
+        return True
+
+    def remove_value(self, value: str) -> None:
+        if value not in self._values:
+            return
+        self._values = [item for item in self._values if item != value]
+        for index in range(self.chip_layout.count() - 1, -1, -1):
+            item = self.chip_layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, RemovableChip) and widget.label.text() == value:
+                taken = self.chip_layout.takeAt(index)
+                if taken is not None and taken.widget() is not None:
+                    taken.widget().deleteLater()
+                break
+        self._refresh_state()
+
+    def clear_values(self) -> None:
+        self._values = []
+        for index in range(self.chip_layout.count() - 1, -1, -1):
+            item = self.chip_layout.takeAt(index)
+            if item is not None and item.widget() is not None:
+                item.widget().deleteLater()
+        self._refresh_state()
+
+    def set_values(self, values: list[str]) -> None:
+        self.clear_values()
+        for value in values:
+            self.add_value(value)
+
+    def set_locked(self, locked: bool) -> None:
+        self._locked = locked
+        for index in range(self.chip_layout.count()):
+            item = self.chip_layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, RemovableChip):
+                widget.set_locked(locked)
+
+    def _refresh_state(self) -> None:
+        has_values = bool(self._values)
+        self.empty_label.setVisible(not has_values)
+        self.chip_container.setVisible(has_values)
 
 
 class FlowLayout(QLayout):
@@ -1477,8 +1599,11 @@ class RelayWorkbenchPage(QWidget):
     send_requested = Signal(object)
     save_template_requested = Signal(object, object)
     open_templates_requested = Signal(object)
+    stop_requested = Signal()
 
     PACKAGE_COLUMNS = [
+        ("enabled", "启用", "bool"),
+        ("remove", "", "remove"),
         ("sequence", "顺序", "int"),
         ("item_type", "类型", "text"),
         ("content", "内容", "text"),
@@ -1487,6 +1612,8 @@ class RelayWorkbenchPage(QWidget):
     ]
 
     ROUTE_COLUMNS = [
+        ("enabled", "启用", "bool"),
+        ("remove", "", "remove"),
         ("downstream_session", "收件人会话", "text"),
         ("validation_status", "验证状态", "text"),
         ("validation_message", "结果说明", "text"),
@@ -1515,8 +1642,15 @@ class RelayWorkbenchPage(QWidget):
         self.source_session_input.setPlaceholderText("可选，例如：客户A项目群")
         self.package_name_input = QLineEdit()
         self.package_name_input.setPlaceholderText("可选，例如：4月客户回传")
-        self.collect_sender_input = QLineEdit()
-        self.collect_sender_input.setPlaceholderText("可选，仅群聊时使用，多个成员用 | 分隔")
+        self.collect_sender_chips = ChipListWidget("未指定群成员时，默认采集群里所有成员发送的内容。")
+        self.collect_sender_chips.remove_requested.connect(self._confirm_remove_sender_filter)
+        self.add_sender_filter_button = QPushButton("+群成员")
+        self.add_sender_filter_button.setProperty("variant", "ghost")
+        sender_filter_box = QVBoxLayout()
+        sender_filter_box.setContentsMargins(0, 0, 0, 0)
+        sender_filter_box.setSpacing(8)
+        sender_filter_box.addWidget(_flow_container(self.add_sender_filter_button))
+        sender_filter_box.addWidget(self.collect_sender_chips)
         self.message_limit_spin = QSpinBox()
         self.message_limit_spin.setRange(1, 500)
         self.message_limit_spin.setValue(20)
@@ -1540,7 +1674,7 @@ class RelayWorkbenchPage(QWidget):
         count_row = _flow_container(message_limit_label, self.message_limit_spin, file_limit_label, self.file_limit_spin, h_spacing=10)
         form.addRow("来源会话", self.source_session_input)
         form.addRow("任务名称", self.package_name_input)
-        form.addRow("群成员筛选", self.collect_sender_input)
+        form.addRow("群成员筛选", self._wrap_layout(sender_filter_box))
         form.addRow("采集方式", self.collect_mode_combo)
         form.addRow("时间范围", self.collect_recent_combo)
         form.addRow("采集数量", count_row)
@@ -1568,6 +1702,24 @@ class RelayWorkbenchPage(QWidget):
             )
         )
         layout.addWidget(source_card)
+
+        self.runtime_card = CardFrame("运行中控制", hero=True)
+        self.runtime_status_label = QLabel("当前没有正在执行的任务。")
+        self.runtime_status_label.setProperty("role", "warn")
+        self.runtime_status_label.setWordWrap(True)
+        self.runtime_tip_label = QLabel("点“立即停止”后，会在当前这一步完成后停下，不会硬中断正在操作的微信界面。")
+        self.runtime_tip_label.setProperty("role", "hint")
+        self.runtime_tip_label.setWordWrap(True)
+        self.runtime_stop_button = QPushButton("立即停止")
+        self.runtime_stop_button.setProperty("variant", "danger")
+        self.runtime_stop_button.setMinimumHeight(48)
+        self.runtime_stop_button.setMinimumWidth(180)
+        self.runtime_stop_button.clicked.connect(self.stop_requested.emit)
+        self.runtime_card.body_layout.addWidget(self.runtime_status_label)
+        self.runtime_card.body_layout.addWidget(_flow_container(self.runtime_stop_button))
+        self.runtime_card.body_layout.addWidget(self.runtime_tip_label)
+        self.runtime_card.hide()
+        layout.addWidget(self.runtime_card)
 
         package_card = CardFrame("发送内容")
         self.add_text_button = QPushButton("+文本")
@@ -1606,6 +1758,8 @@ class RelayWorkbenchPage(QWidget):
         self.package_table.verticalHeader().setVisible(False)
         self.package_table.horizontalHeader().setStretchLastSection(True)
         self.package_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self._package_table_edit_triggers = self.package_table.editTriggers()
+        self._package_table_selection_mode = self.package_table.selectionMode()
         package_card.body_layout.addWidget(self.package_table)
         layout.addWidget(package_card)
 
@@ -1633,6 +1787,8 @@ class RelayWorkbenchPage(QWidget):
         self.route_table.verticalHeader().setVisible(False)
         self.route_table.horizontalHeader().setStretchLastSection(True)
         self.route_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self._route_table_edit_triggers = self.route_table.editTriggers()
+        self._route_table_selection_mode = self.route_table.selectionMode()
         route_card.body_layout.addWidget(self.route_table)
         self.validate_routes_button = QPushButton("验证收件人")
         self.test_send_button = QPushButton("先发到文件传输助手")
@@ -1652,6 +1808,7 @@ class RelayWorkbenchPage(QWidget):
         self.collect_files_button.clicked.connect(self._request_collect_files)
         self.collect_media_button.clicked.connect(self._request_collect_media)
         self.collect_mode_combo.currentIndexChanged.connect(self._sync_collect_mode)
+        self.add_sender_filter_button.clicked.connect(self._add_sender_filter)
         self.import_folder_button.clicked.connect(self._request_import_folder)
         self.export_package_button.clicked.connect(self._request_export_package)
         self.save_template_button.clicked.connect(self._request_save_template)
@@ -1680,13 +1837,13 @@ class RelayWorkbenchPage(QWidget):
         self.set_running_state(False)
 
     def _configure_package_columns(self) -> None:
-        widths = {"sequence": 70, "item_type": 90, "content": 340, "file_path": 360, "collected_at": 150}
+        widths = {"enabled": 56, "remove": 44, "sequence": 70, "item_type": 90, "content": 340, "file_path": 360, "collected_at": 150}
         for index, (key, _, _) in enumerate(self.PACKAGE_COLUMNS):
             if key in widths:
                 self.package_table.setColumnWidth(index, widths[key])
 
     def _configure_route_columns(self) -> None:
-        widths = {"downstream_session": 240, "validation_status": 110, "validation_message": 320}
+        widths = {"enabled": 56, "remove": 44, "downstream_session": 240, "validation_status": 110, "validation_message": 320}
         for index, (key, _, _) in enumerate(self.ROUTE_COLUMNS):
             if key in widths:
                 self.route_table.setColumnWidth(index, widths[key])
@@ -1697,7 +1854,7 @@ class RelayWorkbenchPage(QWidget):
             message_limit=self.message_limit_spin.value(),
             collect_mode=self.current_collect_mode(),
             recent_range=self.current_recent_range(),
-            sender_names=self.collect_sender_input.text().strip(),
+            sender_names="|".join(self.collect_sender_chips.values()),
         )
         errors = request.validate()
         if errors:
@@ -1711,7 +1868,7 @@ class RelayWorkbenchPage(QWidget):
             file_limit=self.file_limit_spin.value(),
             collect_mode=self.current_collect_mode(),
             recent_range=self.current_recent_range(),
-            sender_names=self.collect_sender_input.text().strip(),
+            sender_names="|".join(self.collect_sender_chips.values()),
         )
         errors = request.validate()
         if errors:
@@ -1720,7 +1877,7 @@ class RelayWorkbenchPage(QWidget):
         self.collect_files_requested.emit(request)
 
     def _request_collect_media(self) -> None:
-        if self.collect_sender_input.text().strip():
+        if self.collect_sender_chips.values():
             QMessageBox.information(self, "采集图片/视频", "图片/视频当前还不支持按群成员筛选，请先清空群成员筛选后再采集。")
             return
         if self.current_collect_mode() is RelayCollectMode.PERIOD:
@@ -1742,6 +1899,25 @@ class RelayWorkbenchPage(QWidget):
             return
         self.save_template_requested.emit(TaskType.RELAY_SEND, self.template_payload())
 
+    def _add_sender_filter(self) -> None:
+        value, ok = QInputDialog.getText(self, "添加群成员筛选", "输入一个要采集的群成员名称")
+        if not ok or not value.strip():
+            return
+        if not self.collect_sender_chips.add_value(value):
+            QMessageBox.information(self, "添加群成员筛选", "这个群成员已经在筛选列表里了。")
+            return
+        self.refresh_package_summary("已加入群成员筛选。采集时将只保留这些成员发送的内容。")
+
+    def _confirm_remove_sender_filter(self, value: str) -> None:
+        answer = QMessageBox.question(self, "删除群成员筛选", f"确定删除群成员“{value}”吗？")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.collect_sender_chips.remove_value(value)
+        if self.collect_sender_chips.values():
+            self.refresh_package_summary("群成员筛选已更新。")
+        else:
+            self.refresh_package_summary()
+
     def current_collect_mode(self) -> RelayCollectMode:
         value = self.collect_mode_combo.currentData()
         return value if isinstance(value, RelayCollectMode) else RelayCollectMode.COUNT
@@ -1749,6 +1925,14 @@ class RelayWorkbenchPage(QWidget):
     def current_recent_range(self) -> RelayRecentRange:
         value = self.collect_recent_combo.currentData()
         return value if isinstance(value, RelayRecentRange) else RelayRecentRange.TODAY
+
+    @staticmethod
+    def _coerce_positive_spin_value(value: Any, default: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default
 
     def _sync_collect_mode(self) -> None:
         is_period = self.current_collect_mode() is RelayCollectMode.PERIOD
@@ -1758,10 +1942,45 @@ class RelayWorkbenchPage(QWidget):
         elif not self.package_rows():
             self.package_summary_label.setText("还没有发送内容。可以手动添加，也可以从聊天或文件夹导入。")
 
+    def set_runtime_status(self, message: str) -> None:
+        self.runtime_status_label.setText(message.strip() or "任务正在执行，请稍候。")
+
+    def show_runtime_panel(self, message: str) -> None:
+        self.set_runtime_status(message)
+        self.runtime_card.show()
+        self.runtime_stop_button.setEnabled(True)
+        self.runtime_stop_button.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _set_table_locked(
+        self,
+        table: QTableWidget,
+        locked: bool,
+        edit_triggers: QAbstractItemView.EditTriggers,
+        selection_mode: QAbstractItemView.SelectionMode,
+    ) -> None:
+        table.setEnabled(not locked)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers if locked else edit_triggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection if locked else selection_mode)
+        if isinstance(table, RelayPackageTableWidget):
+            table.setAcceptDrops(not locked)
+            table.viewport().setAcceptDrops(not locked)
+        for row_index in range(table.rowCount()):
+            for column_index in range(table.columnCount()):
+                widget = table.cellWidget(row_index, column_index)
+                if widget is not None:
+                    widget.setEnabled(not locked)
+
     def template_payload(self) -> dict[str, Any]:
         return {
             "source_session": self.source_session_input.text().strip(),
             "package_name": self.package_name_input.text().strip(),
+            "collect_settings": {
+                "message_limit": self.message_limit_spin.value(),
+                "file_limit": self.file_limit_spin.value(),
+                "collect_mode": self.current_collect_mode(),
+                "recent_range": self.current_recent_range(),
+                "sender_names": "|".join(self.collect_sender_chips.values()),
+            },
             "package_rows": self.package_rows(),
             "route_rows": self.route_rows(),
         }
@@ -1769,6 +1988,29 @@ class RelayWorkbenchPage(QWidget):
     def load_template_payload(self, payload: dict[str, Any]) -> None:
         self.source_session_input.setText(str(payload.get("source_session", "") or "").strip())
         self.package_name_input.setText(str(payload.get("package_name", "") or "").strip())
+        collect_settings = payload.get("collect_settings", {})
+        if not isinstance(collect_settings, dict):
+            collect_settings = {}
+        self.message_limit_spin.setValue(self._coerce_positive_spin_value(collect_settings.get("message_limit"), self.message_limit_spin.value()))
+        self.file_limit_spin.setValue(self._coerce_positive_spin_value(collect_settings.get("file_limit"), self.file_limit_spin.value()))
+        collect_mode = coerce_relay_collect_mode(collect_settings.get("collect_mode", RelayCollectMode.COUNT))
+        if not isinstance(collect_mode, RelayCollectMode):
+            collect_mode = RelayCollectMode.COUNT
+        collect_mode_index = self.collect_mode_combo.findData(collect_mode)
+        self.collect_mode_combo.setCurrentIndex(collect_mode_index if collect_mode_index >= 0 else 0)
+        recent_range = coerce_relay_recent_range(collect_settings.get("recent_range", RelayRecentRange.TODAY))
+        if not isinstance(recent_range, RelayRecentRange):
+            recent_range = RelayRecentRange.TODAY
+        recent_range_index = self.collect_recent_combo.findData(recent_range)
+        self.collect_recent_combo.setCurrentIndex(recent_range_index if recent_range_index >= 0 else 0)
+        self.collect_sender_chips.set_values(
+            [
+                part.strip()
+                for part in str(collect_settings.get("sender_names", "") or "").split("|")
+                if part.strip()
+            ]
+        )
+        self._sync_collect_mode()
         package_rows = [
             RelayPackageRow.from_mapping(
                 item.__dict__ | {"item_type": item.item_type.value} if isinstance(item, RelayPackageRow) else item
@@ -1903,14 +2145,14 @@ class RelayWorkbenchPage(QWidget):
     def current_validation_request(self) -> RelayValidationRequest:
         return RelayValidationRequest(
             source_session=self.source_session_input.text().strip(),
-            route_rows=self.route_rows(),
+            route_rows=[row for row in self.route_rows() if row.enabled],
         )
 
     def current_send_request(self, test_only: bool) -> RelaySendRequest:
         return RelaySendRequest(
             source_session=self.source_session_input.text().strip(),
-            package_rows=self.package_rows(),
-            route_rows=self.route_rows(),
+            package_rows=[row for row in self.package_rows() if row.enabled],
+            route_rows=[row for row in self.route_rows() if row.enabled],
             test_only=test_only,
         )
 
@@ -2024,10 +2266,11 @@ class RelayWorkbenchPage(QWidget):
         if not rows:
             self.package_summary_label.setText("还没有发送内容。可以手动添加，也可以从聊天或文件夹导入。")
             return
+        enabled_count = sum(1 for row in rows if row.enabled)
         text_count = sum(1 for row in rows if row.item_type is RelayItemType.TEXT)
         file_count = sum(1 for row in rows if row.item_type is RelayItemType.FILE)
         image_count = sum(1 for row in rows if row.item_type is RelayItemType.IMAGE)
-        parts = [f"当前已准备 {len(rows)} 条内容"]
+        parts = [f"当前已准备 {len(rows)} 条内容", f"启用 {enabled_count} 条"]
         if text_count:
             parts.append(f"文本 {text_count} 条")
         if file_count:
@@ -2044,10 +2287,11 @@ class RelayWorkbenchPage(QWidget):
         if not rows:
             self.route_summary_label.setText("还没有收件人。")
             return
+        enabled_count = sum(1 for row in rows if row.enabled)
         found_count = sum(1 for row in rows if row.validation_status == "已找到")
         missing_count = sum(1 for row in rows if row.validation_status == "未找到")
         pending_count = len(rows) - found_count - missing_count
-        parts = [f"当前有 {len(rows)} 个收件人"]
+        parts = [f"当前有 {len(rows)} 个收件人", f"启用 {enabled_count} 个"]
         if found_count:
             parts.append(f"已验证可用 {found_count} 个")
         if missing_count:
@@ -2061,7 +2305,7 @@ class RelayWorkbenchPage(QWidget):
         for widget in [
             self.source_session_input,
             self.package_name_input,
-            self.collect_sender_input,
+            self.add_sender_filter_button,
             self.message_limit_spin,
             self.file_limit_spin,
             self.collect_mode_combo,
@@ -2089,7 +2333,27 @@ class RelayWorkbenchPage(QWidget):
             self.send_button,
         ]:
             widget.setEnabled(not is_running)
+        self.collect_sender_chips.set_locked(is_running)
+        self._set_table_locked(
+            self.package_table,
+            locked=is_running,
+            edit_triggers=self._package_table_edit_triggers,
+            selection_mode=self._package_table_selection_mode,
+        )
+        self._set_table_locked(
+            self.route_table,
+            locked=is_running,
+            edit_triggers=self._route_table_edit_triggers,
+            selection_mode=self._route_table_selection_mode,
+        )
         self.collect_recent_combo.setEnabled(not is_running and self.current_collect_mode() is RelayCollectMode.PERIOD)
+        self.runtime_card.setVisible(is_running)
+        self.runtime_stop_button.setEnabled(is_running)
+        if is_running:
+            if not self.runtime_status_label.text().strip():
+                self.runtime_status_label.setText("任务正在执行，请稍候。")
+        else:
+            self.runtime_status_label.setText("当前没有正在执行的任务。")
 
     def _set_table_row(self, table: QTableWidget, row_index: int, columns: list[tuple[str, str, str]], values: dict[str, Any]) -> None:
         for column_index, (key, _, kind) in enumerate(columns):
@@ -2100,6 +2364,23 @@ class RelayWorkbenchPage(QWidget):
                 item.setCheckState(Qt.CheckState.Checked if bool(value) else Qt.CheckState.Unchecked)
                 item.setText("")
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            elif kind == "remove":
+                button = table.cellWidget(row_index, column_index)
+                if button is None:
+                    button = QPushButton("❌")
+                    button.setCursor(Qt.CursorShape.PointingHandCursor)
+                    button.setFixedSize(24, 24)
+                    button.setStyleSheet(
+                        "QPushButton { color: #dc2626; border: none; background: transparent; }"
+                        "QPushButton:hover { background: #fee2e2; border-radius: 12px; }"
+                    )
+                    if table is self.package_table:
+                        button.clicked.connect(lambda _checked=False, btn=button: self._confirm_remove_table_row(self.package_table, btn, "发送内容"))
+                    else:
+                        button.clicked.connect(lambda _checked=False, btn=button: self._confirm_remove_table_row(self.route_table, btn, "收件人"))
+                    table.setCellWidget(row_index, column_index, button)
+                button.setEnabled(not self._running)
+                continue
             elif key == "item_type":
                 item_value = value.value if isinstance(value, RelayItemType) else str(value or RelayItemType.TEXT.value)
                 item.setData(Qt.ItemDataRole.UserRole, item_value)
@@ -2113,6 +2394,8 @@ class RelayWorkbenchPage(QWidget):
     def _row_mapping(self, table: QTableWidget, row_index: int, columns: list[tuple[str, str, str]]) -> dict[str, Any]:
         mapping: dict[str, Any] = {}
         for column_index, (key, _, kind) in enumerate(columns):
+            if kind == "remove":
+                continue
             item = table.item(row_index, column_index)
             if kind == "bool":
                 mapping[key] = item.checkState() == Qt.CheckState.Checked if item else False
@@ -2128,6 +2411,34 @@ class RelayWorkbenchPage(QWidget):
         rows = sorted({item.row() for item in table.selectedItems()}, reverse=True)
         for row_index in rows:
             table.removeRow(row_index)
+
+    @staticmethod
+    def _wrap_layout(layout: QVBoxLayout) -> QWidget:
+        container = QWidget()
+        container.setLayout(layout)
+        return container
+
+    def _confirm_remove_table_row(self, table: QTableWidget, button: QWidget, label: str) -> None:
+        row_index = self._row_for_cell_widget(table, button)
+        if row_index < 0:
+            return
+        answer = QMessageBox.question(self, f"删除{label}", f"确定删除这条{label}吗？")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        table.removeRow(row_index)
+        if table is self.package_table:
+            self._renumber_package_rows()
+            self.refresh_package_summary()
+        else:
+            self.refresh_route_summary()
+
+    @staticmethod
+    def _row_for_cell_widget(table: QTableWidget, widget: QWidget) -> int:
+        for row_index in range(table.rowCount()):
+            for column_index in range(table.columnCount()):
+                if table.cellWidget(row_index, column_index) is widget:
+                    return row_index
+        return -1
 
     def _renumber_package_rows(self) -> None:
         sequence_column = next(index for index, (key, _, _) in enumerate(self.PACKAGE_COLUMNS) if key == "sequence")

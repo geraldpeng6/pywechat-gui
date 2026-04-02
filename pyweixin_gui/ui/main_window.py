@@ -35,7 +35,7 @@ from ..executor import BatchExecutor, failed_rows_from_execution
 from ..export_service import ChatExportService
 from ..export_worker import ChatExportWorker
 from ..import_export import dump_rows
-from ..models import AppSettings, ChatBatchExportRequest, ChatBatchExportResult, ChatExportRequest, ChatExportResult, ExecutionRecord, ExecutionRowResult, ExportHistoryRecord, FileBatchRow, GroupScanResult, MessageBatchRow, RelayCollectFilesRequest, RelayCollectMediaRequest, RelayCollectionResult, RelayCollectTextRequest, RelayPackageExportRequest, RelayPackageExportResult, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelaySendResult, RelayValidationRequest, RelayValidationResult, ResourceExportRequest, ResourceExportResult, SessionScanRequest, SessionScanResult, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json, relay_template_from_json, relay_template_to_json
+from ..models import AppSettings, ChatBatchExportRequest, ChatBatchExportResult, ChatExportRequest, ChatExportResult, ExecutionRecord, ExecutionRowResult, ExportHistoryRecord, FileBatchRow, GroupScanResult, MessageBatchRow, RelayCollectFilesRequest, RelayCollectMediaRequest, RelayCollectionResult, RelayCollectTextRequest, RelayPackageExportRequest, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelaySendResult, RelayValidationRequest, RelayValidationResult, ResourceExportRequest, ResourceExportResult, SessionScanRequest, SessionScanResult, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json, relay_template_from_json, relay_template_to_json
 from ..presentation import execution_metrics, execution_type_label, export_history_can_rerun, export_history_can_retry_failed, export_history_failed_sessions, export_type_label, filter_executions, filter_templates, format_export_history_detail, rebuild_export_request, serialize_export_detail, summarize_failures, template_metrics, template_type_label
 from ..relay_service import RelayService
 from ..relay_worker import RelayWorker
@@ -178,6 +178,11 @@ class MainWindow(QMainWindow):
             return
         self.stack.setCurrentIndex(self._stack_indexes[page])
 
+    def _scroll_page_to_top(self, page: QWidget) -> None:
+        scroll = self.stack.widget(self._stack_indexes[page])
+        if isinstance(scroll, QScrollArea):
+            scroll.verticalScrollBar().setValue(0)
+
     def _open_history_page(self) -> None:
         self.records_page.show_execution_tab()
         self._open_page(self.records_page)
@@ -243,6 +248,7 @@ class MainWindow(QMainWindow):
         self.relay_page.validate_routes_requested.connect(self.start_relay_validate_routes)
         self.relay_page.test_send_requested.connect(self.start_relay_test_send)
         self.relay_page.send_requested.connect(self.start_relay_send)
+        self.relay_page.stop_requested.connect(self.stop_batch)
         self.message_page.save_template_requested.connect(self.save_template)
         self.file_page.save_template_requested.connect(self.save_template)
         self.message_page.open_templates_requested.connect(self.open_templates_for)
@@ -432,6 +438,7 @@ class MainWindow(QMainWindow):
             rows_json = relay_template_to_json(
                 source_session=str(payload.get("source_session", "") or ""),
                 package_name=str(payload.get("package_name", "") or ""),
+                collect_settings=payload.get("collect_settings", {}) if isinstance(payload.get("collect_settings"), dict) else {},
                 package_rows=[item for item in payload.get("package_rows", []) if isinstance(item, RelayPackageRow)],
                 route_rows=[item for item in payload.get("route_rows", []) if isinstance(item, RelayRouteRow)],
             )
@@ -812,6 +819,9 @@ class MainWindow(QMainWindow):
         self.worker_thread.finished.connect(self._cleanup_worker)
         self.worker_thread.start()
         self._set_running_state(True)
+        self._open_page(self.relay_page)
+        self._scroll_page_to_top(self.relay_page)
+        self.relay_page.show_runtime_panel(start_message)
         self.status_bar.showMessage(start_message, 5000)
 
     def _start_relay_worker(
@@ -1038,6 +1048,7 @@ class MainWindow(QMainWindow):
 
     def _handle_relay_progress(self, message: str) -> None:
         self.status_bar.showMessage(message, 3000)
+        self.relay_page.set_runtime_status(message)
         self.relay_page.result_text.setPlainText(message)
 
     def _handle_relay_finished(
@@ -1112,6 +1123,7 @@ class MainWindow(QMainWindow):
         elif isinstance(self.worker, SessionToolsWorker):
             self.session_tools_page.session_summary_label.setText("采集失败，请查看错误详情。")
         elif isinstance(self.worker, RelayWorker):
+            self.relay_page.set_runtime_status("任务执行失败，请查看错误详情。")
             self.relay_page.result_text.setPlainText("任务执行失败，请查看错误详情。")
         self._show_error_dialog(ui_error, "任务执行失败")
 
