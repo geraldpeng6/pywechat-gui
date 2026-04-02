@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..import_export import dump_route_rows, dump_rows, dump_table, load_route_rows, load_rows, load_session_names
-from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectTextRequest, RelayItemType, RelayPackageExportRequest, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelayValidationRequest, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row
+from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectTextRequest, RelayItemType, RelayPackageExportRequest, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelayValidationRequest, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row, coerce_resource_export_kind
 
 
 @dataclass
@@ -1191,8 +1191,9 @@ class ResourceToolsPage(QWidget):
         self.set_running_state(False)
 
     def current_request(self) -> tuple[ResourceExportRequest | None, dict[str, str]]:
+        kind = coerce_resource_export_kind(self.kind_combo.currentData())
         request = ResourceExportRequest(
-            export_kind=self.kind_combo.currentData(),
+            export_kind=kind,  # type: ignore[arg-type]
             target_folder=self.target_folder_input.text().strip(),
             year=str(self.year_spin.value()),
             month="" if self.month_spin.value() == 0 else f"{self.month_spin.value():02d}",
@@ -1217,13 +1218,14 @@ class ResourceToolsPage(QWidget):
         self.summary_label.setText("示例已填好。你可以直接改年份和导出目录。")
 
     def _sync_form_state(self) -> None:
-        kind = self.kind_combo.currentData()
+        kind = coerce_resource_export_kind(self.kind_combo.currentData())
         show_year_month = kind in {ResourceExportKind.WXFILES, ResourceExportKind.VIDEOS}
         self.year_spin.setEnabled(show_year_month)
         self.month_spin.setEnabled(show_year_month)
 
     def apply_request(self, request: ResourceExportRequest) -> None:
-        index = self.kind_combo.findData(request.export_kind)
+        kind = coerce_resource_export_kind(request.export_kind)
+        index = self.kind_combo.findData(kind)
         if index >= 0:
             self.kind_combo.setCurrentIndex(index)
         self.target_folder_input.setText(request.target_folder)
@@ -1240,8 +1242,10 @@ class ResourceToolsPage(QWidget):
         self.choose_folder_button.setEnabled(not is_running)
         self.kind_combo.setEnabled(not is_running)
         self.target_folder_input.setEnabled(not is_running)
-        self.year_spin.setEnabled(not is_running and self.kind_combo.currentData() in {ResourceExportKind.WXFILES, ResourceExportKind.VIDEOS})
-        self.month_spin.setEnabled(not is_running and self.kind_combo.currentData() in {ResourceExportKind.WXFILES, ResourceExportKind.VIDEOS})
+        current_kind = coerce_resource_export_kind(self.kind_combo.currentData())
+        show_year_month = current_kind in {ResourceExportKind.WXFILES, ResourceExportKind.VIDEOS}
+        self.year_spin.setEnabled(not is_running and show_year_month)
+        self.month_spin.setEnabled(not is_running and show_year_month)
 
 
 class SessionToolsPage(QWidget):

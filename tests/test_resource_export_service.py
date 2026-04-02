@@ -45,6 +45,18 @@ class ResourceExportServiceTestCase(unittest.TestCase):
             self.assertEqual(result.exported_count, 1)
             self.assertIn("video.mp4", result.exported_paths[0])
 
+    def test_string_export_kind_is_normalized(self):
+        service = ResourceExportService(FakeAdapter())
+        with tempfile.TemporaryDirectory() as tempdir:
+            request = ResourceExportRequest(export_kind="recent_files", target_folder=tempdir, year="2026")
+            result = service.run_export(request, RuntimeOptions())
+            self.assertEqual(result.export_kind, ResourceExportKind.RECENT_FILES)
+            self.assertTrue(Path(result.summary_txt).name.startswith("recent_files-summary-"))
+
+    def test_invalid_export_kind_is_rejected(self):
+        request = ResourceExportRequest(export_kind="invalid_kind", target_folder="C:/exports", year="2026")
+        self.assertIn("export_kind", request.validate())
+
 
 if __name__ == "__main__":
     unittest.main()

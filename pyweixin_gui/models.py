@@ -329,6 +329,18 @@ class ResourceExportKind(str, Enum):
     VIDEOS = "videos"
 
 
+def coerce_resource_export_kind(value: ResourceExportKind | str) -> ResourceExportKind | str:
+    if isinstance(value, ResourceExportKind):
+        return value
+    text = _normalize_text(value)
+    if not text:
+        return text
+    try:
+        return ResourceExportKind(text)
+    except ValueError:
+        return text
+
+
 @dataclass
 class ResourceExportRequest:
     export_kind: ResourceExportKind
@@ -336,8 +348,13 @@ class ResourceExportRequest:
     year: str = datetime.now().strftime("%Y")
     month: str = ""
 
+    def __post_init__(self) -> None:
+        self.export_kind = coerce_resource_export_kind(self.export_kind)  # type: ignore[assignment]
+
     def validate(self) -> dict[str, str]:
         errors: dict[str, str] = {}
+        if not isinstance(self.export_kind, ResourceExportKind):
+            errors["export_kind"] = "请选择有效的导出类型"
         if not self.target_folder.strip():
             errors["target_folder"] = "请选择导出文件夹"
         if not self.year.isdigit() or len(self.year) != 4:
