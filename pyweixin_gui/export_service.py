@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 from .adapter import PyWeixinAdapter
 from .import_export import dump_table
 from .models import ChatBatchExportRequest, ChatBatchExportResult, ChatExportRequest, ChatExportResult, RuntimeOptions
+from .paths import create_unique_timestamped_dir
 
 
 ProgressCallback = Callable[[str], None]
@@ -32,9 +32,7 @@ class ChatExportService:
     ) -> ChatExportResult:
         self._check_stop(should_stop)
         target_root = Path(request.target_folder).expanduser().resolve()
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        export_folder = target_root / f"{_sanitize_filename(request.session_name)}-{timestamp}"
-        export_folder.mkdir(parents=True, exist_ok=True)
+        export_folder = create_unique_timestamped_dir(target_root, _sanitize_filename(request.session_name))
 
         result = ChatExportResult(session_name=request.session_name, export_folder=str(export_folder))
         warnings: list[str] = []
@@ -100,9 +98,7 @@ class ChatExportService:
         should_stop: StopCallback | None = None,
     ) -> ChatBatchExportResult:
         target_root = Path(request.target_folder).expanduser().resolve()
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        batch_root = target_root / f"批量会话导出-{timestamp}"
-        batch_root.mkdir(parents=True, exist_ok=True)
+        batch_root = create_unique_timestamped_dir(target_root, "批量会话导出")
 
         session_results: list[ChatExportResult] = []
         failed_sessions: list[dict[str, str]] = []

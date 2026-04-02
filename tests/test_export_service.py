@@ -3,7 +3,9 @@ from __future__ import annotations
 import importlib.util
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from pyweixin_gui.export_service import ChatExportService
 from pyweixin_gui.models import ChatExportRequest, RuntimeOptions
@@ -26,6 +28,29 @@ class ParseFailureAdapter(FakeAdapter):
 
 
 class ExportServiceTestCase(unittest.TestCase):
+    def test_export_bundle_uses_unique_folder_when_same_second_repeats(self):
+        service = ChatExportService(FakeAdapter())
+
+        class FixedDateTime:
+            @staticmethod
+            def now():
+                return datetime(2026, 4, 3, 9, 30, 0)
+
+        with tempfile.TemporaryDirectory() as tempdir, patch("pyweixin_gui.paths.datetime", FixedDateTime):
+            request = ChatExportRequest(
+                session_name="测试群",
+                target_folder=tempdir,
+                export_messages=False,
+                export_files=True,
+                file_limit=10,
+            )
+            first = service.export_chat_bundle(request, RuntimeOptions())
+            second = service.export_chat_bundle(request, RuntimeOptions())
+
+        self.assertNotEqual(first.export_folder, second.export_folder)
+        self.assertTrue(Path(first.export_folder).name.startswith("测试群-20260403-093000"))
+        self.assertTrue(Path(second.export_folder).name.startswith("测试群-20260403-093000"))
+
     @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl not installed")
     def test_export_bundle_writes_summary_and_messages(self):
         service = ChatExportService(FakeAdapter())

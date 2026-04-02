@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -13,10 +14,12 @@ except ModuleNotFoundError:  # pragma: no cover - optional GUI dependency in loc
 
 from pyweixin_gui.models import RelayCollectMode, RelayItemType, RelayPackageRow, RelayRecentRange, RelayRouteRow
 if QApplication is not None:
-    from pyweixin_gui.ui.widgets import RelayWorkbenchPage, RemovableChip
+    from pyweixin_gui.ui.widgets import ExportPage, RelayWorkbenchPage, RemovableChip, ResourceToolsPage
 else:  # pragma: no cover - optional GUI dependency in local test env
+    ExportPage = None  # type: ignore[assignment]
     RelayWorkbenchPage = None  # type: ignore[assignment]
     RemovableChip = None  # type: ignore[assignment]
+    ResourceToolsPage = None  # type: ignore[assignment]
 
 
 @unittest.skipIf(QApplication is None, "当前环境未安装 PySide6")
@@ -82,6 +85,44 @@ class RelayWorkbenchPageTestCase(unittest.TestCase):
         self.assertTrue(chip_widget.delete_button.isEnabled())
         self.assertTrue(package_remove_button.isEnabled())
         self.assertTrue(route_remove_button.isEnabled())
+
+    def test_export_page_ignores_rapid_repeat_submit(self):
+        page = ExportPage()
+        page.session_name_input.setText("项目群")
+        page.target_folder_input.setText("C:/exports")
+        emitted = []
+        page.export_requested.connect(emitted.append)
+
+        page._request_export()
+        page._request_export()
+
+        self.assertEqual(len(emitted), 1)
+        self.assertIn("不必重复点击", page.summary_label.text())
+
+    def test_resource_export_page_ignores_rapid_repeat_submit(self):
+        page = ResourceToolsPage()
+        page.target_folder_input.setText("C:/exports")
+        emitted = []
+        page.export_requested.connect(emitted.append)
+
+        page._request_export()
+        page._request_export()
+
+        self.assertEqual(len(emitted), 1)
+        self.assertIn("不必重复点击", page.summary_label.text())
+
+    def test_relay_package_export_ignores_rapid_repeat_submit(self):
+        page = RelayWorkbenchPage()
+        page.append_package_rows([RelayPackageRow(sequence=1, item_type=RelayItemType.TEXT, content="第一条")])
+        emitted = []
+        page.export_package_requested.connect(emitted.append)
+
+        with patch("pyweixin_gui.ui.widgets.QFileDialog.getExistingDirectory", return_value="/tmp"):
+            page._request_export_package()
+            page._request_export_package()
+
+        self.assertEqual(len(emitted), 1)
+        self.assertIn("不必重复点击", page.result_text.toPlainText())
 
     @staticmethod
     def _row_remove_button(table, columns) -> QPushButton | None:

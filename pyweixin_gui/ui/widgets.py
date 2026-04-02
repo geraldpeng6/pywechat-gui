@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from time import monotonic
+from typing import Any, Callable
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -71,6 +72,35 @@ RELAY_ITEM_LABELS = {
     RelayItemType.FILE.value: "文件",
     RelayItemType.IMAGE.value: "图片",
 }
+
+ACTION_COOLDOWN_MS = 1500
+
+
+def _action_cooldown_active(deadlines: dict[str, float], action_key: str) -> bool:
+    return monotonic() < deadlines.get(action_key, 0.0)
+
+
+def _start_action_cooldown(
+    deadlines: dict[str, float],
+    action_key: str,
+    buttons: list[QPushButton],
+    is_running: Callable[[], bool],
+    cooldown_ms: int = ACTION_COOLDOWN_MS,
+) -> bool:
+    if _action_cooldown_active(deadlines, action_key):
+        return False
+    deadlines[action_key] = monotonic() + (cooldown_ms / 1000)
+    for button in buttons:
+        button.setEnabled(False)
+
+    def _restore() -> None:
+        if _action_cooldown_active(deadlines, action_key) or is_running():
+            return
+        for button in buttons:
+            button.setEnabled(True)
+
+    QTimer.singleShot(cooldown_ms, _restore)
+    return True
 
 
 class CardFrame(QFrame):
@@ -1032,6 +1062,8 @@ class ExportPage(QWidget):
         from PySide6.QtWidgets import QCheckBox, QFormLayout, QSpinBox
 
         super().__init__(parent)
+        self._running = False
+        self._action_cooldowns: dict[str, float] = {}
         self._buttons: dict[str, QPushButton] = {}
         layout = QVBoxLayout(self)
         card = CardFrame("会话导出", hero=True)
@@ -1148,6 +1180,15 @@ class ExportPage(QWidget):
             QMessageBox.warning(self, "导出参数不完整", first_error)
             self.summary_label.setText("导出参数不完整，请先补齐后再执行。")
             return
+        if not _start_action_cooldown(
+            self._action_cooldowns,
+            action_key="chat-export",
+            buttons=[self._buttons["一键导出"], self._buttons["批量导出会话"]],
+            is_running=lambda: self._running,
+        ):
+            self.summary_label.setText("刚刚已经触发导出，请稍候，不必重复点击。")
+            return
+        self.summary_label.setText("已触发会话导出，请稍候，不必重复点击。")
         self.export_requested.emit(request)
 
     def _request_batch_export(self) -> None:
@@ -1165,6 +1206,15 @@ class ExportPage(QWidget):
             QMessageBox.warning(self, "批量导出参数不完整", next(iter(errors.values())))
             self.summary_label.setText("批量导出参数不完整，请先补齐后再执行。")
             return
+        if not _start_action_cooldown(
+            self._action_cooldowns,
+            action_key="chat-export",
+            buttons=[self._buttons["一键导出"], self._buttons["批量导出会话"]],
+            is_running=lambda: self._running,
+        ):
+            self.summary_label.setText("刚刚已经触发导出，请稍候，不必重复点击。")
+            return
+        self.summary_label.setText("已触发批量导出，请稍候，不必重复点击。")
         self.batch_export_requested.emit(request)
 
     def _choose_folder(self) -> None:
@@ -1211,6 +1261,7 @@ class ExportPage(QWidget):
         self.summary_label.setText("已回填批量导出参数。确认无误后可重新执行。")
 
     def set_running_state(self, is_running: bool) -> None:
+        self._running = is_running
         for name, button in self._buttons.items():
             if name == "停止":
                 button.setEnabled(is_running)
@@ -1235,6 +1286,8 @@ class ResourceToolsPage(QWidget):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self._running = False
+        self._action_cooldowns: dict[str, float] = {}
         self._buttons: dict[str, QPushButton] = {}
         layout = QVBoxLayout(self)
         card = CardFrame("资源导出工具", hero=True)
@@ -1329,6 +1382,15 @@ class ResourceToolsPage(QWidget):
             QMessageBox.warning(self, "导出参数不完整", next(iter(errors.values())))
             self.summary_label.setText("导出参数不完整，请先补齐后再执行。")
             return
+        if not _start_action_cooldown(
+            self._action_cooldowns,
+            action_key="resource-export",
+            buttons=[self._buttons["开始导出"]],
+            is_running=lambda: self._running,
+        ):
+            self.summary_label.setText("刚刚已经触发资源导出，请稍候，不必重复点击。")
+            return
+        self.summary_label.setText("已触发资源导出，请稍候，不必重复点击。")
         self.export_requested.emit(request)
 
     def _choose_folder(self) -> None:
@@ -1356,6 +1418,7 @@ class ResourceToolsPage(QWidget):
         self.summary_label.setText("已回填上次资源导出参数。确认无误后可重新执行。")
 
     def set_running_state(self, is_running: bool) -> None:
+        self._running = is_running
         for name, button in self._buttons.items():
             if name == "停止":
                 button.setEnabled(is_running)
@@ -1622,6 +1685,7 @@ class RelayWorkbenchPage(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._running = False
+        self._action_cooldowns: dict[str, float] = {}
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
@@ -2102,6 +2166,15 @@ class RelayWorkbenchPage(QWidget):
         if errors:
             QMessageBox.warning(self, "导出发送文件夹", next(iter(errors.values())))
             return
+        if not _start_action_cooldown(
+            self._action_cooldowns,
+            action_key="relay-package-export",
+            buttons=[self.export_package_button],
+            is_running=lambda: self._running,
+        ):
+            self.result_text.setPlainText("刚刚已经触发发送文件夹导出，请稍候，不必重复点击。")
+            return
+        self.result_text.setPlainText("已触发发送文件夹导出，请稍候，不必重复点击。")
         self.export_package_requested.emit(request)
 
     def append_package_rows(self, rows: list[RelayPackageRow], summary: str = "") -> None:

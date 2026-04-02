@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import os
 from pathlib import Path
 
@@ -57,3 +58,20 @@ def ensure_app_dirs() -> dict[str, Path]:
         "database": app_dir / "app.db",
         "settings": app_dir / "settings.json",
     }
+
+
+def create_unique_timestamped_dir(root: str | Path, base_name: str, timestamp: str | None = None) -> Path:
+    parent = Path(root).expanduser().resolve()
+    parent.mkdir(parents=True, exist_ok=True)
+    stamp = timestamp or datetime.now().strftime("%Y%m%d-%H%M%S")
+    normalized_base = base_name.strip() or "export"
+    suffix = 1
+
+    while True:
+        candidate_name = f"{normalized_base}-{stamp}" if suffix == 1 else f"{normalized_base}-{stamp}-{suffix:02d}"
+        candidate = parent / candidate_name
+        try:
+            candidate.mkdir(parents=True, exist_ok=False)
+            return candidate
+        except FileExistsError:
+            suffix += 1

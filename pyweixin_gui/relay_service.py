@@ -29,7 +29,7 @@ from .models import (
     RelayValidationResult,
     RuntimeOptions,
 )
-from .paths import ensure_app_dirs
+from .paths import create_unique_timestamped_dir, ensure_app_dirs
 
 
 ProgressCallback = Callable[[str], None]
@@ -346,11 +346,8 @@ class RelayService:
         if errors:
             raise ValueError(next(iter(errors.values())))
         target_root = Path(request.target_folder).expanduser().resolve()
-        target_root.mkdir(parents=True, exist_ok=True)
         package_name = request.package_name.strip() or request.source_session.strip() or "发送任务"
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        package_folder = target_root / f"{self._sanitize_name(package_name)}-{timestamp}"
-        package_folder.mkdir(parents=True, exist_ok=True)
+        package_folder = create_unique_timestamped_dir(target_root, self._sanitize_name(package_name))
         files_folder = package_folder / "素材文件"
         files_folder.mkdir(parents=True, exist_ok=True)
 
@@ -597,8 +594,7 @@ class RelayService:
     def _relay_cache_dir(source_session: str) -> Path:
         dirs = ensure_app_dirs()
         safe_name = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in source_session).strip("_") or "relay-source"
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        return dirs["local_dir"] / "relay-cache" / f"{safe_name}-{timestamp}"
+        return create_unique_timestamped_dir(dirs["local_dir"] / "relay-cache", safe_name)
 
     @staticmethod
     def _placeholder_media_label(message: str) -> str | None:

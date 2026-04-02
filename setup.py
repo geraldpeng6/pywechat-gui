@@ -2,9 +2,16 @@ import sys
 from setuptools import find_packages, setup
 
 
+is_64bit_python = sys.maxsize == 2**63 - 1
 packages = ["pywechat"]
-if sys.maxsize == 2**63 - 1:
+entry_points = {}
+if is_64bit_python:
     packages = find_packages(include=["pywechat", "pywechat.*", "pyweixin", "pyweixin.*", "pyweixin_gui", "pyweixin_gui.*"])
+    entry_points = {
+        'console_scripts': [
+            'autowechat=pyweixin_gui.app:main',
+        ]
+    }
 
 setup(name='pywechat127',
 version='1.9.9',
@@ -29,11 +36,7 @@ extras_require={
     'gui': ['PySide6>=6.6.0', 'openpyxl>=3.1.0'],
     'dev-gui': ['PySide6>=6.6.0', 'openpyxl>=3.1.0', 'PyInstaller>=6.0.0'],
 },
-entry_points={
-    'console_scripts': [
-        'autowechat=pyweixin_gui.app:main',
-    ]
-}
+entry_points=entry_points
 )
 '''
 Author:Hello-Mr-Crab

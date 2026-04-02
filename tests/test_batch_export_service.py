@@ -3,7 +3,9 @@ from __future__ import annotations
 import importlib.util
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from pyweixin_gui.export_service import ChatExportService
 from pyweixin_gui.models import ChatBatchExportRequest, RuntimeOptions
@@ -23,6 +25,31 @@ class FakeAdapter:
 
 
 class BatchExportServiceTestCase(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl not installed")
+    def test_batch_export_uses_unique_root_when_same_second_repeats(self):
+        service = ChatExportService(FakeAdapter())
+
+        class FixedDateTime:
+            @staticmethod
+            def now():
+                return datetime(2026, 4, 3, 9, 45, 0)
+
+        with tempfile.TemporaryDirectory() as tempdir, patch("pyweixin_gui.paths.datetime", FixedDateTime):
+            request = ChatBatchExportRequest(
+                session_names=["项目群"],
+                target_folder=tempdir,
+                export_messages=True,
+                export_files=True,
+                message_limit=10,
+                file_limit=10,
+            )
+            first = service.export_chat_batch(request, RuntimeOptions())
+            second = service.export_chat_batch(request, RuntimeOptions())
+
+        self.assertNotEqual(first.export_root, second.export_root)
+        self.assertTrue(Path(first.export_root).name.startswith("批量会话导出-20260403-094500"))
+        self.assertTrue(Path(second.export_root).name.startswith("批量会话导出-20260403-094500"))
+
     @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl not installed")
     def test_batch_export_records_success_and_failure(self):
         service = ChatExportService(FakeAdapter())
