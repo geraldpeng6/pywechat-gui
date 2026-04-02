@@ -35,7 +35,7 @@ from ..executor import BatchExecutor, failed_rows_from_execution
 from ..export_service import ChatExportService
 from ..export_worker import ChatExportWorker
 from ..import_export import dump_rows
-from ..models import AppSettings, ChatBatchExportRequest, ChatBatchExportResult, ChatExportRequest, ChatExportResult, ExecutionRecord, ExecutionRowResult, ExportHistoryRecord, FileBatchRow, GroupScanResult, MessageBatchRow, RelayCollectFilesRequest, RelayCollectionResult, RelayCollectTextRequest, RelayPackageExportRequest, RelayPackageExportResult, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelaySendResult, RelayValidationRequest, RelayValidationResult, ResourceExportRequest, ResourceExportResult, SessionScanRequest, SessionScanResult, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json, relay_template_from_json, relay_template_to_json
+from ..models import AppSettings, ChatBatchExportRequest, ChatBatchExportResult, ChatExportRequest, ChatExportResult, ExecutionRecord, ExecutionRowResult, ExportHistoryRecord, FileBatchRow, GroupScanResult, MessageBatchRow, RelayCollectFilesRequest, RelayCollectMediaRequest, RelayCollectionResult, RelayCollectTextRequest, RelayPackageExportRequest, RelayPackageExportResult, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelaySendResult, RelayValidationRequest, RelayValidationResult, ResourceExportRequest, ResourceExportResult, SessionScanRequest, SessionScanResult, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json, relay_template_from_json, relay_template_to_json
 from ..presentation import execution_metrics, execution_type_label, export_history_can_rerun, export_history_can_retry_failed, export_history_failed_sessions, export_type_label, filter_executions, filter_templates, format_export_history_detail, rebuild_export_request, serialize_export_detail, summarize_failures, template_metrics, template_type_label
 from ..relay_service import RelayService
 from ..relay_worker import RelayWorker
@@ -235,6 +235,7 @@ class MainWindow(QMainWindow):
         self.session_tools_page.use_session_names_requested.connect(self.load_session_names_into_export_page)
         self.relay_page.collect_texts_requested.connect(self.start_relay_collect_texts)
         self.relay_page.collect_files_requested.connect(self.start_relay_collect_files)
+        self.relay_page.collect_media_requested.connect(self.start_relay_collect_media)
         self.relay_page.import_folder_requested.connect(self.import_relay_folder)
         self.relay_page.export_package_requested.connect(self.export_relay_package)
         self.relay_page.save_template_requested.connect(self.save_template)
@@ -690,6 +691,9 @@ class MainWindow(QMainWindow):
     def start_relay_collect_files(self, request: RelayCollectFilesRequest) -> None:
         self._start_relay_worker("collect_files", request, "正在采集上游聊天文件，请等待完成。")
 
+    def start_relay_collect_media(self, request: RelayCollectMediaRequest) -> None:
+        self._start_relay_worker("collect_media", request, "正在采集聊天记录中的图片/视频，请等待完成。")
+
     def import_relay_folder(self, folder_path: str) -> None:
         try:
             result = self.relay_service.load_folder_rows(folder_path)
@@ -813,7 +817,7 @@ class MainWindow(QMainWindow):
     def _start_relay_worker(
         self,
         action: str,
-        request: RelayCollectTextRequest | RelayCollectFilesRequest | RelayValidationRequest | RelaySendRequest,
+        request: RelayCollectTextRequest | RelayCollectFilesRequest | RelayCollectMediaRequest | RelayValidationRequest | RelaySendRequest,
         start_message: str,
     ) -> None:
         if self.worker_thread is not None:
@@ -1054,6 +1058,13 @@ class MainWindow(QMainWindow):
                 result.warning or f"已采集 {len(result.rows)} 个文件/图片，请确认是否都是本次要发送的版本。"
             )
             self.status_bar.showMessage("聊天文件采集完成。", 5000)
+            return
+        if action == "collect_media" and isinstance(result, RelayCollectionResult):
+            self.relay_page.append_package_rows(result.rows)
+            self.relay_page.refresh_package_summary(
+                result.warning or f"已采集 {len(result.rows)} 个图片/视频素材，请确认是否都是本次要发送的内容。"
+            )
+            self.status_bar.showMessage("图片/视频采集完成。", 5000)
             return
         if action == "validate_routes" and isinstance(result, RelayValidationResult):
             summary = (

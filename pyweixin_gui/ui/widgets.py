@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..import_export import dump_route_rows, dump_rows, dump_table, load_route_rows, load_rows, load_session_names
-from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectTextRequest, RelayItemType, RelayPackageExportRequest, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelayValidationRequest, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row, coerce_resource_export_kind
+from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectMediaRequest, RelayCollectTextRequest, RelayItemType, RelayPackageExportRequest, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelayValidationRequest, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row, coerce_resource_export_kind
 
 
 @dataclass
@@ -1469,6 +1469,7 @@ class ExportCenterPage(QWidget):
 class RelayWorkbenchPage(QWidget):
     collect_texts_requested = Signal(object)
     collect_files_requested = Signal(object)
+    collect_media_requested = Signal(object)
     import_folder_requested = Signal(str)
     export_package_requested = Signal(object)
     validate_routes_requested = Signal(object)
@@ -1524,7 +1525,7 @@ class RelayWorkbenchPage(QWidget):
         _set_compact_width(self.file_limit_spin, 120)
         message_limit_label = QLabel("文字")
         message_limit_label.setProperty("role", "muted")
-        file_limit_label = QLabel("文件")
+        file_limit_label = QLabel("文件/媒体")
         file_limit_label.setProperty("role", "muted")
         count_row = _flow_container(message_limit_label, self.message_limit_spin, file_limit_label, self.file_limit_spin, h_spacing=10)
         form.addRow("来源会话", self.source_session_input)
@@ -1534,6 +1535,7 @@ class RelayWorkbenchPage(QWidget):
 
         self.collect_texts_button = QPushButton("采集文字")
         self.collect_files_button = QPushButton("采集聊天文件")
+        self.collect_media_button = QPushButton("采集图片/视频")
         self.import_folder_button = QPushButton("从文件夹导入")
         self.export_package_button = QPushButton("导出发送文件夹")
         self.export_package_button.setProperty("variant", "ghost")
@@ -1545,6 +1547,7 @@ class RelayWorkbenchPage(QWidget):
             _flow_container(
                 self.collect_texts_button,
                 self.collect_files_button,
+                self.collect_media_button,
                 self.import_folder_button,
                 self.export_package_button,
                 self.save_template_button,
@@ -1634,6 +1637,7 @@ class RelayWorkbenchPage(QWidget):
 
         self.collect_texts_button.clicked.connect(self._request_collect_texts)
         self.collect_files_button.clicked.connect(self._request_collect_files)
+        self.collect_media_button.clicked.connect(self._request_collect_media)
         self.import_folder_button.clicked.connect(self._request_import_folder)
         self.export_package_button.clicked.connect(self._request_export_package)
         self.save_template_button.clicked.connect(self._request_save_template)
@@ -1694,6 +1698,17 @@ class RelayWorkbenchPage(QWidget):
             return
         self.collect_files_requested.emit(request)
 
+    def _request_collect_media(self) -> None:
+        request = RelayCollectMediaRequest(
+            source_session=self.source_session_input.text().strip(),
+            media_limit=self.file_limit_spin.value(),
+        )
+        errors = request.validate()
+        if errors:
+            QMessageBox.warning(self, "采集图片/视频", next(iter(errors.values())))
+            return
+        self.collect_media_requested.emit(request)
+
     def _request_save_template(self) -> None:
         if not self.package_rows():
             QMessageBox.information(self, "保存模板", "请先准备至少一条发送内容。")
@@ -1712,7 +1727,9 @@ class RelayWorkbenchPage(QWidget):
         self.source_session_input.setText(str(payload.get("source_session", "") or "").strip())
         self.package_name_input.setText(str(payload.get("package_name", "") or "").strip())
         package_rows = [
-            RelayPackageRow.from_mapping(item.__dict__ if isinstance(item, RelayPackageRow) else item)
+            RelayPackageRow.from_mapping(
+                item.__dict__ | {"item_type": item.item_type.value} if isinstance(item, RelayPackageRow) else item
+            )
             for item in payload.get("package_rows", [])
             if isinstance(item, (RelayPackageRow, dict))
         ]
@@ -2005,6 +2022,7 @@ class RelayWorkbenchPage(QWidget):
             self.file_limit_spin,
             self.collect_texts_button,
             self.collect_files_button,
+            self.collect_media_button,
             self.import_folder_button,
             self.export_package_button,
             self.save_template_button,

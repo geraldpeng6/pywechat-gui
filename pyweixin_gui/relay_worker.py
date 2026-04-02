@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, Signal
 
 from .error_handling import map_exception
-from .models import RelayCollectFilesRequest, RelayCollectTextRequest, RelaySendRequest, RelayValidationRequest, RuntimeOptions
+from .models import RelayCollectFilesRequest, RelayCollectMediaRequest, RelayCollectTextRequest, RelaySendRequest, RelayValidationRequest, RuntimeOptions
 from .relay_service import RelayService
 
 
@@ -17,7 +17,7 @@ class RelayWorker(QObject):
         service: RelayService,
         action: str,
         runtime_options: RuntimeOptions,
-        request: RelayCollectTextRequest | RelayCollectFilesRequest | RelayValidationRequest | RelaySendRequest | None = None,
+        request: RelayCollectTextRequest | RelayCollectFilesRequest | RelayCollectMediaRequest | RelayValidationRequest | RelaySendRequest | None = None,
     ):
         super().__init__()
         self.service = service
@@ -39,6 +39,10 @@ class RelayWorker(QObject):
                 if not isinstance(self.request, RelayCollectFilesRequest):
                     raise ValueError("缺少文件采集参数")
                 result = self.service.collect_file_rows(self.request, self.runtime_options, self.progress.emit)
+            elif self.action == "collect_media":
+                if not isinstance(self.request, RelayCollectMediaRequest):
+                    raise ValueError("缺少图片/视频采集参数")
+                result = self.service.collect_media_rows(self.request, self.runtime_options, self.progress.emit)
             elif self.action == "validate_routes":
                 if not isinstance(self.request, RelayValidationRequest):
                     raise ValueError("缺少路由验证参数")

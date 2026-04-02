@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from pyweixin_gui.models import (
     RelayCollectFilesRequest,
+    RelayCollectMediaRequest,
     RelayCollectTextRequest,
     RelayItemType,
     RelayPackageExportRequest,
@@ -35,6 +36,13 @@ class FakeAdapter:
     def validate_session(self, session_name, options):
         if session_name == "找不到":
             raise RuntimeError("未找到会话")
+
+    def save_chat_media(self, session_name, number, target_folder, options):
+        folder = Path(target_folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "截图.png").write_text("png", encoding="utf-8")
+        (folder / "演示视频.mp4").write_text("mp4", encoding="utf-8")
+        return [str(folder / "截图.png"), str(folder / "演示视频.mp4")]
 
     def send_relay_item(self, target_session, item, options):
         if target_session == "发送失败":
@@ -84,6 +92,12 @@ class RelayServiceTestCase(unittest.TestCase):
         result = self.service.collect_file_rows(RelayCollectFilesRequest(source_session="上游A", file_limit=5), self.options)
         self.assertEqual(len(result.rows), 2)
         self.assertIn(result.rows[0].item_type, {RelayItemType.FILE, RelayItemType.IMAGE})
+
+    def test_collect_media_rows(self):
+        result = self.service.collect_media_rows(RelayCollectMediaRequest(source_session="上游A", media_limit=5), self.options)
+        self.assertEqual(len(result.rows), 2)
+        self.assertEqual(result.rows[0].item_type, RelayItemType.IMAGE)
+        self.assertEqual(result.rows[1].item_type, RelayItemType.FILE)
 
     def test_validate_routes(self):
         rows = [

@@ -12,6 +12,7 @@ from .adapter import PyWeixinAdapter
 from .import_export import dump_table, load_table_rows
 from .models import (
     RelayCollectFilesRequest,
+    RelayCollectMediaRequest,
     RelayCollectionResult,
     RelayCollectTextRequest,
     RelayItemType,
@@ -95,7 +96,7 @@ class RelayService:
         warning = "" if rows else "当前没有采集到可转发的文本消息。"
         if skipped_media:
             media_summary = "、".join(f"{label}{count}条" for label, count in skipped_media.items())
-            extra = f"已自动跳过 {media_summary}。如需补入图片，请先把图片保存到本机，再用“选择文件/图片”或“从文件夹导入”。"
+            extra = f"已自动跳过 {media_summary}。如需把这些内容继续加入发送列表，可再点“采集图片/视频”或手动补入本地素材。"
             warning = f"{warning} {extra}".strip()
         return RelayCollectionResult(source_session=request.source_session, rows=rows, warning=warning)
 
@@ -143,6 +144,45 @@ class RelayService:
             )
         if not rows and not warning:
             warning = "当前没有采集到可转发的聊天文件。"
+        return RelayCollectionResult(source_session=request.source_session, rows=rows, warning=warning)
+
+    def collect_media_rows(
+        self,
+        request: RelayCollectMediaRequest,
+        runtime_options: RuntimeOptions,
+        on_progress: ProgressCallback | None = None,
+    ) -> RelayCollectionResult:
+        errors = request.validate()
+        if errors:
+            raise ValueError(next(iter(errors.values())))
+        if on_progress:
+            on_progress("正在采集聊天记录中的图片/视频...")
+        cache_dir = self._relay_cache_dir(request.source_session)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        saved_paths = self.adapter.save_chat_media(
+            session_name=request.source_session,
+            number=request.media_limit,
+            target_folder=str(cache_dir),
+            options=runtime_options,
+        )
+        files = sorted(
+            [Path(path) for path in saved_paths if Path(path).is_file()],
+            key=lambda item: item.stat().st_mtime,
+        )
+        rows: list[RelayPackageRow] = []
+        for index, file_path in enumerate(files, start=1):
+            item_type = RelayItemType.IMAGE if file_path.suffix.lower() in IMAGE_SUFFIXES else RelayItemType.FILE
+            rows.append(
+                RelayPackageRow(
+                    sequence=index,
+                    item_type=item_type,
+                    source_session=request.source_session,
+                    content=file_path.name,
+                    file_path=str(file_path),
+                    collected_at=datetime.fromtimestamp(file_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+                )
+            )
+        warning = "" if rows else "当前没有采集到可转发的历史图片或视频。"
         return RelayCollectionResult(source_session=request.source_session, rows=rows, warning=warning)
 
     def validate_routes(

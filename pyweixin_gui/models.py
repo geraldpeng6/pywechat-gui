@@ -419,6 +419,21 @@ class RelayItemType(str, Enum):
     IMAGE = "image"
 
 
+def coerce_relay_item_type(value: RelayItemType | str) -> RelayItemType:
+    if isinstance(value, RelayItemType):
+        return value
+    normalized = _normalize_text(value).lower()
+    mapping = {
+        RelayItemType.TEXT.value: RelayItemType.TEXT,
+        "文本": RelayItemType.TEXT,
+        RelayItemType.FILE.value: RelayItemType.FILE,
+        "文件": RelayItemType.FILE,
+        RelayItemType.IMAGE.value: RelayItemType.IMAGE,
+        "图片": RelayItemType.IMAGE,
+    }
+    return mapping.get(normalized, RelayItemType.TEXT)
+
+
 @dataclass
 class RelayPackageRow:
     enabled: bool = True
@@ -432,9 +447,7 @@ class RelayPackageRow:
 
     @classmethod
     def from_mapping(cls, mapping: dict[str, Any]) -> "RelayPackageRow":
-        item_type = str(mapping.get("item_type", RelayItemType.TEXT.value) or RelayItemType.TEXT.value).strip().lower()
-        if item_type not in {member.value for member in RelayItemType}:
-            item_type = RelayItemType.TEXT.value
+        item_type = coerce_relay_item_type(mapping.get("item_type", RelayItemType.TEXT.value))
         sequence = mapping.get("sequence", 1)
         try:
             sequence_value = int(sequence)
@@ -443,7 +456,7 @@ class RelayPackageRow:
         return cls(
             enabled=_parse_bool(mapping.get("enabled"), True),
             sequence=max(1, sequence_value),
-            item_type=RelayItemType(item_type),
+            item_type=item_type,
             source_session=_normalize_text(mapping.get("source_session")),
             content=_normalize_text(mapping.get("content")),
             file_path=_normalize_text(mapping.get("file_path")),
@@ -523,6 +536,20 @@ class RelayCollectFilesRequest:
             errors["source_session"] = "请先填写上游会话"
         if self.file_limit <= 0:
             errors["file_limit"] = "文件数量必须大于 0"
+        return errors
+
+
+@dataclass
+class RelayCollectMediaRequest:
+    source_session: str
+    media_limit: int = 10
+
+    def validate(self) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        if not self.source_session.strip():
+            errors["source_session"] = "请先填写来源会话"
+        if self.media_limit <= 0:
+            errors["media_limit"] = "图片/视频数量必须大于 0"
         return errors
 
 

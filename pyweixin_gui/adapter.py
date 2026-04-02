@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
 import platform
 from pathlib import Path
+import re
+import time
 
 from .error_handling import UiError, map_exception
 from .models import EnvironmentStatus, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayItemType, RelayPackageRow, RuntimeOptions, SessionSummaryRow
@@ -148,6 +151,73 @@ class PyWeixinAdapter:
             close_weixin=options.close_weixin,
         )
 
+    def save_chat_media(self, session_name: str, number: int, target_folder: str, options: RuntimeOptions) -> list[str]:
+        pyweixin = self._load_pyweixin()
+        from pywinauto import Desktop
+        import pyautogui
+
+        from pyweixin.WeChatTools import Navigator
+        from pyweixin.WinSettings import SystemSettings
+
+        target_dir = Path(target_folder).expanduser().resolve()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        pyautogui.FAILSAFE = False
+
+        chat_history_window = Navigator.open_chat_history(
+            friend=session_name,
+            TabItem="图片与视频",
+            search_pages=options.search_pages,
+            is_maximize=options.is_maximize,
+            close_weixin=options.close_weixin,
+        )
+        media_list = self._find_media_history_list(chat_history_window)
+        if media_list is None or not media_list.exists(timeout=0.5):
+            chat_history_window.close()
+            return []
+
+        items = [item for item in media_list.children() if item.descendants(control_type="Button")]
+        if not items:
+            chat_history_window.close()
+            return []
+
+        items[-1].descendants(control_type="Button")[-1].double_click_input()
+        chat_history_window.close()
+
+        desktop = Desktop(backend="uia")
+        preview_window = desktop.window(control_type="Window", class_name="mmui::PreviewWindow")
+        if not preview_window.exists(timeout=3):
+            return []
+
+        saved_paths: list[str] = []
+        saved_count = 0
+        visited_steps = 0
+        max_steps = max(number * 3, number + 5)
+        while saved_count < number and visited_steps < max_steps:
+            visited_steps += 1
+            media_kind = self._detect_preview_media_kind(preview_window)
+            if media_kind is None:
+                self._move_preview_to_previous(pyautogui)
+                if self._is_preview_at_first(preview_window):
+                    break
+                continue
+
+            before_names = {path.name for path in target_dir.iterdir() if path.is_file()}
+            save_button = preview_window.child_window(title_re="另存为|Save as|另存為", control_type="Button")
+            if save_button.exists(timeout=1):
+                save_button.click_input()
+                saved_path = self._save_preview_to_folder(target_dir, before_names)
+                if saved_path:
+                    saved_paths.append(saved_path)
+                    saved_count += 1
+
+            self._move_preview_to_previous(pyautogui)
+            if self._is_preview_at_first(preview_window):
+                break
+
+        if preview_window.exists(timeout=0.3):
+            preview_window.close()
+        return saved_paths
+
     def export_recent_files(self, target_folder: str, options: RuntimeOptions) -> list[str]:
         pyweixin = self._load_pyweixin()
         return pyweixin.Files.export_recent_files(
@@ -238,3 +308,84 @@ class PyWeixinAdapter:
     @staticmethod
     def map_runtime_exception(exc: BaseException) -> UiError:
         return map_exception(exc)
+
+    @staticmethod
+    def _find_media_history_list(chat_history_window):
+        selectors = [
+            {"title": "照片和视频", "control_type": "List"},
+            {"title": "图片与视频", "control_type": "List"},
+            {"title": "Photos & Videos", "control_type": "List"},
+            {"title": "圖片與影片", "control_type": "List"},
+        ]
+        for selector in selectors:
+            widget = chat_history_window.child_window(**selector)
+            if widget.exists(timeout=0.2):
+                return widget
+        return None
+
+    @staticmethod
+    def _detect_preview_media_kind(preview_window) -> str | None:
+        image_expired = preview_window.child_window(
+            title_re="图片过期或已被清理|Image expired or deleted|圖片過期或已被刪除",
+            control_type="Text",
+        )
+        video_expired = preview_window.child_window(
+            title_re="视频过期或已被删除|Video expired or deleted\\.?|影片已逾期或已被刪除",
+            control_type="Text",
+        )
+        if image_expired.exists(timeout=0.2) or video_expired.exists(timeout=0.2):
+            return None
+        rotate_button = preview_window.child_window(title_re="旋转|Rotate|旋轉", control_type="Button")
+        if rotate_button.exists(timeout=0.2):
+            return "image"
+        return "video"
+
+    @staticmethod
+    def _move_preview_to_previous(pyautogui_module) -> None:
+        pyautogui_module.press("left", _pause=False)
+        time.sleep(0.2)
+
+    @staticmethod
+    def _is_preview_at_first(preview_window) -> bool:
+        earliest_text = preview_window.child_window(
+            title_re="已是第一张|This is the first one|已是第一張",
+            control_type="Text",
+        )
+        return earliest_text.exists(timeout=0.2)
+
+    @staticmethod
+    def _save_preview_to_folder(target_dir: Path, before_names: set[str]) -> str | None:
+        from pywinauto import Desktop
+        import pyautogui
+
+        from pyweixin.WinSettings import SystemSettings
+
+        SystemSettings.copy_text_to_clipboard(str(target_dir))
+        desktop = Desktop(backend="uia")
+        save_window = desktop.window(
+            title_re="另存为|Save as|另存為",
+            control_type="Window",
+            framework_id="Win32",
+            top_level_only=False,
+        )
+        if not save_window.exists(timeout=5):
+            return None
+        save_window.set_focus()
+        time.sleep(0.2)
+        pyautogui.hotkey("alt", "d", _pause=False)
+        time.sleep(0.2)
+        pyautogui.hotkey("ctrl", "a", _pause=False)
+        pyautogui.hotkey("ctrl", "v", _pause=False)
+        pyautogui.press("enter", _pause=False)
+        time.sleep(0.3)
+        pyautogui.hotkey("alt", "s", _pause=False)
+
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            paths = [path for path in target_dir.iterdir() if path.is_file()]
+            new_paths = [path for path in paths if path.name not in before_names]
+            if new_paths:
+                newest = max(new_paths, key=lambda item: item.stat().st_mtime_ns)
+                return str(newest)
+            time.sleep(0.3)
+        return None
