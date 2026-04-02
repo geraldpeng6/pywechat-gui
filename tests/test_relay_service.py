@@ -125,6 +125,9 @@ class RelayServiceTestCase(unittest.TestCase):
             new_file = folder / "报价单.pdf"
             old_file.write_text("old", encoding="utf-8")
             new_file.write_text("new", encoding="utf-8")
+            fixed_timestamp = 1_710_000_000
+            os.utime(old_file, (fixed_timestamp, fixed_timestamp))
+            os.utime(new_file, (fixed_timestamp, fixed_timestamp))
             rows = [
                 RelayPackageRow(sequence=1, item_type=RelayItemType.TEXT, content="文本1"),
                 RelayPackageRow(sequence=2, item_type=RelayItemType.FILE, file_path=str(old_file), content=old_file.name),

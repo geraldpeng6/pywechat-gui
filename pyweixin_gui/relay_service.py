@@ -265,7 +265,7 @@ class RelayService:
 
     @staticmethod
     def keep_latest_file_rows(rows: list[RelayPackageRow]) -> list[RelayPackageRow]:
-        latest_by_key: dict[str, tuple[float, int]] = {}
+        latest_by_key: dict[str, tuple[tuple[int, int, int], int]] = {}
         for index, row in enumerate(rows):
             if row.item_type not in {RelayItemType.FILE, RelayItemType.IMAGE} or not row.file_path:
                 continue
@@ -314,8 +314,14 @@ class RelayService:
         return f"{stem.lower()}{path.suffix.lower()}"
 
     @staticmethod
-    def _file_score(row: RelayPackageRow) -> float:
+    def _file_score(row: RelayPackageRow) -> tuple[int, int, int]:
+        path = Path(row.file_path)
+        normalized_stem = re.sub(r"\(\d+\)$", "", path.stem)
+        canonical_name_score = 1 if path.stem == normalized_stem else 0
         try:
-            return Path(row.file_path).stat().st_mtime
+            modified_score = path.stat().st_mtime_ns
         except OSError:
-            return float(row.sequence)
+            modified_score = 0
+        # On Windows, files created back-to-back can share the same mtime.
+        # Prefer the canonical file name first, then the later row order as a stable tiebreaker.
+        return (modified_score, canonical_name_score, int(row.sequence))
