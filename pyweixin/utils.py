@@ -255,15 +255,19 @@ def At_all(main_window:WindowSpecification):
     if Tools.is_group_chat(main_window):
         edit_area=main_window.child_window(**Edits.CurrentChatEdit)
         mention_popover=main_window.child_window(**Windows.MentionPopOverWindow)
+        edit_area.click_input()
         edit_area.type_keys(f'@')
-        if mention_popover.exists(timeout=0.1):
+        if mention_popover.exists(timeout=1.2, retry_interval=0.1):
             mention_list=mention_popover.child_window(control_type='List',title='')
-            first_item=mention_list.children()[0].window_text()#弹出列表后的第一个人
-            if first_item!='所有人':
+            children=mention_list.children()
+            first_item=children[0].window_text() if children else ''#弹出列表后的第一个人
+            if first_item not in {'所有人','Mention All','All'}:
                 pyautogui.press('backspace',presses=1)
                 print(f'你不是该群群主或管理员,无权@所有人')
             else:
                 edit_area.type_keys('{ENTER}')
+        else:
+            pyautogui.press('backspace',presses=1)
 
 def At(main_window:WindowSpecification,at_members:list[str]):
     '''
@@ -296,15 +300,16 @@ def At(main_window:WindowSpecification,at_members:list[str]):
         for member in at_members:
             cleaned_member=emoji.replace_emoji(member,'')#去掉emoji
             cleaned_member=cleaned_member.split(' ')[0]#找到第一个空格字段之前内容
+            edit_area.click_input()
             edit_area.type_keys(f'@{cleaned_member}')
-            if mention_popover.exists(timeout=0.1):
+            if mention_popover.exists(timeout=1.2, retry_interval=0.1):
                 is_find=select(mention_popover,member)
                 if is_find:
                     edit_area.type_keys('{ENTER}')
                 if not is_find:
                     pyautogui.press('backspace',presses=len(cleaned_member)+1)
             else:
-                edit_area.set_text('')
+                pyautogui.press('backspace',presses=len(cleaned_member)+1)
     
 def open_red_packet(dialog_window:WindowSpecification,red_packet:ListItemWrapper)->int:
     '''
