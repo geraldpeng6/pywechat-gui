@@ -477,8 +477,6 @@ class RelayRouteRow:
 
     def validate(self) -> dict[str, str]:
         errors: dict[str, str] = {}
-        if not self.upstream_session:
-            errors["upstream_session"] = "上游会话不能为空"
         if not self.downstream_session:
             errors["downstream_session"] = "下游会话不能为空"
         return errors
@@ -527,6 +525,8 @@ class RelayValidationRequest:
     def validate(self) -> dict[str, str]:
         if not self.source_session.strip():
             return {"source_session": "请先填写当前上游会话"}
+        if not [row for row in self.route_rows if row.downstream_session.strip()]:
+            return {"route_rows": "请先填写至少一个下游会话"}
         return {}
 
 
@@ -550,8 +550,16 @@ class RelaySendRequest:
         errors: dict[str, str] = {}
         if not self.package_rows:
             errors["package_rows"] = "请先准备至少一条转发内容"
+        else:
+            for index, row in enumerate(self.package_rows, start=1):
+                row_errors = row.validate()
+                if row_errors:
+                    errors["package_rows"] = f"第 {index} 条内容未填写完整：{next(iter(row_errors.values()))}"
+                    break
         if not self.test_only and not self.source_session.strip():
             errors["source_session"] = "正式发送前请先填写上游会话"
+        if not self.test_only and not [row for row in self.route_rows if row.downstream_session.strip()]:
+            errors["route_rows"] = "请先填写至少一个下游会话"
         return errors
 
 

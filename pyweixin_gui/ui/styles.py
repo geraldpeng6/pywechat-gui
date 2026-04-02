@@ -8,6 +8,10 @@ QWidget {
 QMainWindow, QFrame#Card, QFrame#HeroCard, QGroupBox {
     background: #ffffff;
 }
+QScrollArea {
+    border: none;
+    background: transparent;
+}
 QFrame#HeroCard {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #eff6ff, stop:1 #f8fafc);
     border: 1px solid #dbeafe;
@@ -123,6 +127,21 @@ QHeaderView::section {
 }
 QTableWidget {
     gridline-color: #e5e7eb;
+    background: #ffffff;
+    alternate-background-color: #f8fafc;
+    selection-background-color: #dbeafe;
+    selection-color: #0f172a;
+    outline: none;
+}
+QTableWidget::item {
+    padding: 6px 8px;
+}
+QTableWidget::item:alternate {
+    background: #f8fafc;
+}
+QTableWidget::item:selected {
+    background: #dbeafe;
+    color: #0f172a;
 }
 QTableCornerButton::section {
     background: #eff6ff;
@@ -149,6 +168,44 @@ QListWidget#SideNav::item {
 QListWidget#SideNav::item:selected {
     background: #ffffff;
     border: 1px solid #bfdbfe;
+}
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 4px 2px 4px 2px;
+}
+QScrollBar::handle:vertical {
+    background: #cbd5e1;
+    border-radius: 5px;
+    min-height: 28px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #94a3b8;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+QScrollBar::left-arrow:vertical, QScrollBar::right-arrow:vertical {
+    height: 0px;
+    background: transparent;
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 10px;
+    margin: 2px 4px 2px 4px;
+}
+QScrollBar::handle:horizontal {
+    background: #cbd5e1;
+    border-radius: 5px;
+    min-width: 28px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: #94a3b8;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal,
+QScrollBar::left-arrow:horizontal, QScrollBar::right-arrow:horizontal {
+    width: 0px;
+    background: transparent;
 }
 QStatusBar {
     background: #ffffff;

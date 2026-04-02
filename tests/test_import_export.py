@@ -68,17 +68,16 @@ class ImportExportTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             path = Path(tempdir) / "routes.csv"
             dump_table(
-                ["启用", "上游会话", "下游会话", "备注"],
+                ["下游会话"],
                 [
-                    {"启用": True, "上游会话": "上游A", "下游会话": "下游B", "备注": "客户"},
-                    {"启用": False, "上游会话": "上游A", "下游会话": "下游C", "备注": ""},
+                    {"下游会话": "下游B"},
+                    {"下游会话": "下游C"},
                 ],
                 path,
             )
             rows = load_route_rows(path)
-            self.assertEqual(rows[0].upstream_session, "上游A")
             self.assertEqual(rows[0].downstream_session, "下游B")
-            self.assertFalse(rows[1].enabled)
+            self.assertEqual(rows[1].downstream_session, "下游C")
 
     @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl not installed")
     def test_dump_route_rows_template(self):
@@ -91,9 +90,9 @@ class ImportExportTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             path = Path(tempdir) / "routes.csv"
             dump_table(
-                ["启用", "上游会话", "下游会话列表", "备注"],
+                ["下游会话列表"],
                 [
-                    {"启用": True, "上游会话": "上游A", "下游会话列表": "下游B|下游C", "备注": "批量"},
+                    {"下游会话列表": "下游B|下游C"},
                 ],
                 path,
             )

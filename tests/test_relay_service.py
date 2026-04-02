@@ -21,7 +21,7 @@ from pyweixin_gui.relay_service import RelayService
 
 class FakeAdapter:
     def dump_chat_history(self, session_name, number, options):
-        return ["文本1", "文本2"], ["今天 10:00", "今天 10:01"]
+        return ["较新的消息", "较早的消息"], ["今天 10:01", "今天 10:00"]
 
     def save_chat_files(self, session_name, number, target_folder, options):
         folder = Path(target_folder)
@@ -62,6 +62,10 @@ class RelayServiceTestCase(unittest.TestCase):
         result = self.service.collect_text_rows(RelayCollectTextRequest(source_session="上游A", message_limit=2), self.options)
         self.assertEqual(len(result.rows), 2)
         self.assertEqual(result.rows[0].item_type, RelayItemType.TEXT)
+        self.assertEqual(result.rows[0].sequence, 1)
+        self.assertEqual(result.rows[0].content, "较早的消息")
+        self.assertEqual(result.rows[1].sequence, 2)
+        self.assertEqual(result.rows[1].content, "较新的消息")
 
     def test_collect_file_rows(self):
         result = self.service.collect_file_rows(RelayCollectFilesRequest(source_session="上游A", file_limit=5), self.options)
@@ -70,8 +74,8 @@ class RelayServiceTestCase(unittest.TestCase):
 
     def test_validate_routes(self):
         rows = [
-            RelayRouteRow(upstream_session="上游A", downstream_session="下游B"),
-            RelayRouteRow(upstream_session="上游A", downstream_session="找不到"),
+            RelayRouteRow(downstream_session="下游B"),
+            RelayRouteRow(downstream_session="找不到"),
         ]
         result = self.service.validate_routes(RelayValidationRequest(source_session="上游A", route_rows=rows), self.options)
         self.assertEqual(result.checked_count, 2)
@@ -91,8 +95,8 @@ class RelayServiceTestCase(unittest.TestCase):
     def test_send_package_to_routes(self):
         rows = [RelayPackageRow(sequence=1, item_type=RelayItemType.TEXT, content="文本1")]
         routes = [
-            RelayRouteRow(upstream_session="上游A", downstream_session="下游B"),
-            RelayRouteRow(upstream_session="上游A", downstream_session="发送失败"),
+            RelayRouteRow(downstream_session="下游B"),
+            RelayRouteRow(downstream_session="发送失败"),
         ]
         result = self.service.send_package(
             RelaySendRequest(source_session="上游A", package_rows=rows, route_rows=routes, test_only=False),
@@ -117,6 +121,8 @@ class RelayServiceTestCase(unittest.TestCase):
         self.assertEqual(result.source_session, "上游A")
         self.assertEqual(len(result.rows), 3)
         self.assertEqual(result.rows[0].item_type, RelayItemType.TEXT)
+        self.assertEqual(result.rows[0].content, "文本2")
+        self.assertEqual(result.rows[1].content, "文本1")
 
     def test_keep_latest_file_rows(self):
         with TemporaryDirectory() as tempdir:
@@ -134,9 +140,9 @@ class RelayServiceTestCase(unittest.TestCase):
                 RelayPackageRow(sequence=3, item_type=RelayItemType.FILE, file_path=str(new_file), content=new_file.name),
             ]
             updated = RelayService.keep_latest_file_rows(rows)
-            self.assertTrue(updated[0].enabled)
-            self.assertFalse(updated[1].enabled)
-            self.assertTrue(updated[2].enabled)
+            self.assertEqual(len(updated), 2)
+            self.assertEqual(updated[0].content, "文本1")
+            self.assertEqual(updated[1].content, new_file.name)
 
 
 if __name__ == "__main__":

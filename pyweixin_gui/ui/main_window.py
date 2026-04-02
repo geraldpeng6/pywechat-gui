@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QListWidget,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStackedWidget,
     QStatusBar,
@@ -89,7 +91,8 @@ class MainWindow(QMainWindow):
 
         self.nav = QListWidget()
         self.nav.setObjectName("SideNav")
-        self.nav.setFixedWidth(200)
+        self.nav.setMinimumWidth(156)
+        self.nav.setMaximumWidth(220)
         self.nav.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.nav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.stack = QStackedWidget()
@@ -97,6 +100,9 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.nav)
         splitter.addWidget(self.stack)
         splitter.setStretchFactor(1, 1)
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+        splitter.setSizes([176, 1120])
         self.setCentralWidget(root)
 
         self.dashboard_page = DashboardPage()
@@ -136,7 +142,21 @@ class MainWindow(QMainWindow):
 
     def _add_page(self, title: str, page: QWidget) -> None:
         self.nav.addItem(QListWidgetItem(title))
-        self.stack.addWidget(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+        container_layout.addWidget(page)
+        container_layout.addStretch(1)
+
+        scroll.setWidget(container)
+        self.stack.addWidget(scroll)
 
     def _show_welcome_if_needed(self) -> None:
         if self.settings.first_run_risk_ack:

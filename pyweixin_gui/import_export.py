@@ -35,17 +35,11 @@ FILE_HEADERS = [
 ]
 
 ROUTE_HEADERS = [
-    "enabled",
-    "upstream_session",
     "downstream_session",
-    "remark",
 ]
 
 ROUTE_TEMPLATE_HEADERS = [
-    "启用",
-    "上游会话",
     "下游会话",
-    "备注",
 ]
 
 ROUTE_HEADER_ALIASES = {
@@ -158,10 +152,7 @@ def dump_route_rows(rows: list[dict[str, Any]], path: str | Path) -> None:
     for row in rows:
         template_rows.append(
             {
-                "启用": row.get("enabled", ""),
-                "上游会话": row.get("upstream_session", ""),
                 "下游会话": row.get("downstream_session", ""),
-                "备注": row.get("remark", ""),
             }
         )
     dump_table(ROUTE_TEMPLATE_HEADERS, template_rows, path)
@@ -216,10 +207,7 @@ def _expand_route_mapping(mapping: dict[str, Any]) -> list[RelayRouteRow]:
         return [
             RelayRouteRow.from_mapping(
                 {
-                    "enabled": mapping.get("enabled", True),
-                    "upstream_session": mapping.get("upstream_session", ""),
                     "downstream_session": target,
-                    "remark": mapping.get("remark", ""),
                 }
             )
             for target in targets

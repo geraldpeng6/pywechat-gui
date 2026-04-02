@@ -51,16 +51,25 @@ class RelayService:
             options=runtime_options,
         )
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        rows = [
-            RelayPackageRow(
-                sequence=index + 1,
-                item_type=RelayItemType.TEXT,
-                source_session=request.source_session,
-                content=message,
-                collected_at=timestamps[index] if index < len(timestamps) and timestamps[index] else now,
+        text_entries = [
+            (
+                str(message).strip(),
+                timestamps[index] if index < len(timestamps) and timestamps[index] else now,
             )
             for index, message in enumerate(messages)
             if str(message or "").strip()
+        ]
+        # pyweixin 返回的聊天记录顺序是“从晚到早”，这里反转成普通聊天阅读顺序。
+        text_entries.reverse()
+        rows = [
+            RelayPackageRow(
+                sequence=index,
+                item_type=RelayItemType.TEXT,
+                source_session=request.source_session,
+                content=message,
+                collected_at=timestamp,
+            )
+            for index, (message, timestamp) in enumerate(text_entries, start=1)
         ]
         warning = "" if rows else "当前没有采集到可转发的文本消息。"
         return RelayCollectionResult(source_session=request.source_session, rows=rows, warning=warning)
@@ -93,7 +102,7 @@ class RelayService:
                 "这次没有整理到聊天文件。"
                 "该会话可能暂时没有可保存的文件，或当前页面未能成功读取到文件列表。"
             )
-        files = sorted([path for path in cache_dir.iterdir() if path.is_file()], key=lambda item: item.stat().st_mtime, reverse=True)
+        files = sorted([path for path in cache_dir.iterdir() if path.is_file()], key=lambda item: item.stat().st_mtime)
         rows = []
         for index, file_path in enumerate(files[: request.file_limit], start=1):
             item_type = RelayItemType.IMAGE if file_path.suffix.lower() in IMAGE_SUFFIXES else RelayItemType.FILE
@@ -124,10 +133,9 @@ class RelayService:
         found_count = 0
         missing_count = 0
         updated_rows: list[RelayRouteRow] = []
-        matched_rows = self._matched_route_rows(request.route_rows, request.source_session)
         for row in request.route_rows:
             new_row = RelayRouteRow.from_mapping(row.__dict__)
-            if row not in matched_rows or not row.enabled:
+            if not row.downstream_session.strip():
                 updated_rows.append(new_row)
                 continue
             checked_count += 1
@@ -170,7 +178,9 @@ class RelayService:
         if messages_json.exists():
             payload = json.loads(messages_json.read_text(encoding="utf-8"))
             if isinstance(payload, list):
-                for index, item in enumerate(payload, start=1):
+                message_items = [item for item in payload if isinstance(item, dict)]
+                # 现有导出文件中的 messages.json 保留的是采集原顺序，这里统一回填为“从早到晚”。
+                for item in reversed(message_items):
                     if not isinstance(item, dict):
                         continue
                     message = str(item.get("message", "") or "").strip()
@@ -187,7 +197,7 @@ class RelayService:
                     )
         files_folder = folder / "files"
         if files_folder.exists():
-            file_items = sorted([path for path in files_folder.iterdir() if path.is_file()], key=lambda item: item.stat().st_mtime, reverse=True)
+            file_items = sorted([path for path in files_folder.iterdir() if path.is_file()], key=lambda item: item.stat().st_mtime)
             for path in file_items:
                 item_type = RelayItemType.IMAGE if path.suffix.lower() in IMAGE_SUFFIXES else RelayItemType.FILE
                 rows.append(
@@ -213,16 +223,15 @@ class RelayService:
         errors = request.validate()
         if errors:
             raise ValueError(next(iter(errors.values())))
-        package_rows = [item for item in sorted(request.package_rows, key=lambda item: item.sequence) if item.enabled]
+        package_rows = list(sorted(request.package_rows, key=lambda item: item.sequence))
         if not package_rows:
-            raise ValueError("请至少勾选一条转发内容。")
+            raise ValueError("请至少准备一条转发内容。")
         if request.test_only:
             targets = ["文件传输助手"]
         else:
-            matched = self._matched_route_rows(request.route_rows, request.source_session)
-            targets = self._unique_targets([row.downstream_session for row in matched if row.enabled and row.downstream_session.strip()])
+            targets = self._unique_targets([row.downstream_session for row in request.route_rows if row.downstream_session.strip()])
             if not targets:
-                raise ValueError("当前上游没有可用的下游路由。")
+                raise ValueError("请先填写至少一个下游会话。")
         results: list[RelayTargetResult] = []
         success_count = 0
         failure_count = 0
@@ -260,10 +269,6 @@ class RelayService:
         )
 
     @staticmethod
-    def _matched_route_rows(route_rows: list[RelayRouteRow], source_session: str) -> list[RelayRouteRow]:
-        return [row for row in route_rows if row.upstream_session.strip() == source_session.strip()]
-
-    @staticmethod
     def keep_latest_file_rows(rows: list[RelayPackageRow]) -> list[RelayPackageRow]:
         latest_by_key: dict[str, tuple[tuple[int, int, int], int]] = {}
         for index, row in enumerate(rows):
@@ -281,8 +286,7 @@ class RelayService:
                 key = RelayService._normalized_file_key(row.file_path)
                 latest_index = latest_by_key.get(key, (-1, -1))[1]
                 if latest_index != index:
-                    copied.enabled = False
-                    copied.remark = "旧版本，已自动取消勾选"
+                    continue
             updated.append(copied)
         return updated
 
