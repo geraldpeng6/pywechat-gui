@@ -223,6 +223,7 @@ class RelayService:
         for index, row in enumerate(ordered_rows, start=1):
             item_mapping: dict[str, str | int] = {
                 "序号": index,
+                "来源会话": request.source_session,
                 "类型": self._item_type_label(row.item_type),
                 "内容预览": row.content,
                 "采集时间": row.collected_at,
@@ -239,7 +240,7 @@ class RelayService:
             manifest_items.append(item_mapping)
 
         manifest_path = package_folder / "发送清单.xlsx"
-        dump_table(["序号", "类型", "内容预览", "采集时间", "相对路径"], manifest_items, manifest_path)
+        dump_table(["序号", "来源会话", "类型", "内容预览", "采集时间", "相对路径"], manifest_items, manifest_path)
         return RelayPackageExportResult(
             source_session=request.source_session,
             package_name=package_name,
@@ -326,6 +327,13 @@ class RelayService:
         if manifest_path.suffix.lower() == ".xlsx":
             items = load_table_rows(manifest_path)
             source_session = self._guess_export_session_name(folder)
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                candidate = str(item.get("来源会话", "") or item.get("source_session", "") or "").strip()
+                if candidate:
+                    source_session = candidate
+                    break
         else:
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
             source_session = str(payload.get("source_session", "") or "").strip()
