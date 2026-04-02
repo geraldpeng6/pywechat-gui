@@ -1921,10 +1921,13 @@ class Files():
         if month:
             #如果有月份传入，那么在上一步基础上根据月份筛选
             filtered_folders=[folder for folder in filtered_folders if folder.endswith(month)]
+        exported_videos=[]
         for folder_path in filtered_folders:#遍历筛选后的每个文件夹
             #获取该文件夹下以.mp4结尾的所有文件路径列表，然后使用copy_files方法复制过去，
-            exported_videos=[os.path.join(folder_path,filename) for filename in  os.listdir(folder_path) if filename.endswith('.mp4')]
-            SystemSettings.copy_files(exported_videos,target_folder)
+            current_videos=[os.path.join(folder_path,filename) for filename in  os.listdir(folder_path) if filename.endswith('.mp4')]
+            if current_videos:
+                SystemSettings.copy_files(current_videos,target_folder)
+                exported_videos.extend(current_videos)
         print(f'已导出{len(os.listdir(target_folder))}个视频至:{target_folder}')
         return exported_videos
 

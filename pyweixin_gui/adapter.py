@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import platform
+from pathlib import Path
 
 from .error_handling import UiError, map_exception
 from .models import EnvironmentStatus, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayItemType, RelayPackageRow, RuntimeOptions, SessionSummaryRow
@@ -165,11 +166,19 @@ class PyWeixinAdapter:
 
     def export_videos(self, year: str, month: str | None, target_folder: str) -> list[str]:
         pyweixin = self._load_pyweixin()
-        return pyweixin.Files.export_videos(
-            year=year,
-            month=month,
-            target_folder=target_folder,
-        )
+        try:
+            return pyweixin.Files.export_videos(
+                year=year,
+                month=month,
+                target_folder=target_folder,
+            )
+        except UnboundLocalError as exc:
+            if "exported_videos" not in str(exc):
+                raise
+            folder = Path(target_folder)
+            if not folder.exists():
+                return []
+            return [str(path) for path in sorted(folder.iterdir()) if path.is_file()]
 
     def dump_sessions(self, chatted_only: bool, options: RuntimeOptions) -> list[SessionSummaryRow]:
         pyweixin = self._load_pyweixin()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from pyweixin_gui.adapter import PyWeixinAdapter, UnsupportedPlatformError
@@ -52,6 +54,23 @@ class AdapterTestCase(unittest.TestCase):
             rows = adapter.dump_groups(RuntimeOptions())
         self.assertEqual(rows[0].group_name, "项目群")
         self.assertEqual(rows[0].member_count, "")
+
+    def test_export_videos_recovers_from_upstream_unbound_local_error(self):
+        class FakeFiles:
+            @staticmethod
+            def export_videos(year=None, month=None, target_folder=None):
+                raise UnboundLocalError("cannot access local variable 'exported_videos' where it is not associated with a value")
+
+        class FakePyWeixin:
+            Files = FakeFiles
+
+        adapter = PyWeixinAdapter()
+        with tempfile.TemporaryDirectory() as tempdir:
+            exported = Path(tempdir) / "sample.mp4"
+            exported.write_text("demo", encoding="utf-8")
+            with patch.object(adapter, "_load_pyweixin", return_value=FakePyWeixin()):
+                rows = adapter.export_videos("2026", "04", tempdir)
+        self.assertEqual(rows, [str(exported)])
 
 
 if __name__ == "__main__":
