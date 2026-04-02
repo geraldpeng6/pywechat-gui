@@ -79,6 +79,7 @@ QPushButton {
     border: none;
     border-radius: 8px;
     padding: 8px 14px;
+    min-height: 20px;
 }
 QPushButton:hover {
     background: #1d4ed8;
@@ -95,22 +96,38 @@ QPushButton[variant="ghost"] {
 QPushButton[variant="danger"] {
     background: #dc2626;
 }
-QLineEdit, QTextEdit, QPlainTextEdit, QTableWidget, QListWidget, QSpinBox, QDoubleSpinBox, QComboBox {
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 7px 8px;
+    min-height: 22px;
+}
+QTextEdit, QPlainTextEdit, QTableWidget, QListWidget {
     background: #ffffff;
     border: 1px solid #d1d5db;
     border-radius: 8px;
     padding: 6px;
+}
+QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {
+    width: 20px;
 }
 QHeaderView::section {
     background: #eff6ff;
     color: #1e3a8a;
     border: none;
     border-bottom: 1px solid #dbeafe;
-    padding: 8px;
+    padding: 9px 10px;
+    min-height: 24px;
     font-weight: 600;
 }
 QTableWidget {
     gridline-color: #e5e7eb;
+}
+QTableCornerButton::section {
+    background: #eff6ff;
+    border: none;
+    border-bottom: 1px solid #dbeafe;
 }
 QListWidget::item {
     border-radius: 8px;

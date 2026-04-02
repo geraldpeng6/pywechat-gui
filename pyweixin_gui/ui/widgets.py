@@ -96,6 +96,20 @@ def _set_compact_width(widget: QWidget, width: int) -> None:
     widget.setMaximumWidth(width)
 
 
+def _configure_data_table(table: QTableWidget, minimum_height: int | None = None) -> None:
+    table.setAlternatingRowColors(True)
+    table.setWordWrap(True)
+    table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+    header = table.horizontalHeader()
+    header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    header.setMinimumHeight(42)
+    vertical_header = table.verticalHeader()
+    vertical_header.setDefaultSectionSize(38)
+    vertical_header.setMinimumSectionSize(34)
+    if minimum_height is not None:
+        table.setMinimumHeight(minimum_height)
+
+
 class BatchTableWidget(QTableWidget):
     def __init__(self, task_type: TaskType, parent: QWidget | None = None):
         super().__init__(parent)
@@ -103,14 +117,11 @@ class BatchTableWidget(QTableWidget):
         self.columns = MESSAGE_COLUMNS if task_type is TaskType.MESSAGE else FILE_COLUMNS
         self.setColumnCount(len(self.columns))
         self.setHorizontalHeaderLabels([column.title for column in self.columns])
-        self.setAlternatingRowColors(True)
-        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        _configure_data_table(self, minimum_height=360)
         self.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.verticalHeader().setVisible(False)
         self.horizontalHeader().setStretchLastSection(True)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        self.setMinimumHeight(360)
-        self.setWordWrap(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._open_context_menu)
         self._configure_columns()
@@ -261,6 +272,7 @@ class BatchTableWidget(QTableWidget):
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             return item
         item.setText("" if value is None else str(value))
+        item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         return item
 
     def _cell_display_value(self, row_index: int, column_index: int) -> str:
@@ -1185,9 +1197,9 @@ class SessionToolsPage(QWidget):
 
         self.session_table = QTableWidget(0, 3)
         self.session_table.setHorizontalHeaderLabels(["会话名称", "最近时间", "最后一条消息"])
+        _configure_data_table(self.session_table, minimum_height=280)
         self.session_table.verticalHeader().setVisible(False)
         self.session_table.horizontalHeader().setStretchLastSection(True)
-        self.session_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.session_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         session_card.body_layout.addWidget(self.session_table)
         layout.addWidget(session_card)
@@ -1211,9 +1223,9 @@ class SessionToolsPage(QWidget):
 
         self.group_table = QTableWidget(0, 1)
         self.group_table.setHorizontalHeaderLabels(["群聊名称"])
+        _configure_data_table(self.group_table, minimum_height=220)
         self.group_table.verticalHeader().setVisible(False)
         self.group_table.horizontalHeader().setStretchLastSection(True)
-        self.group_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.group_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         group_card.body_layout.addWidget(self.group_table)
         layout.addWidget(group_card)
@@ -1426,9 +1438,9 @@ class RelayWorkbenchPage(QWidget):
         package_card.body_layout.addWidget(tip)
         self.package_table = QTableWidget(0, len(self.PACKAGE_COLUMNS))
         self.package_table.setHorizontalHeaderLabels([title for _, title, _ in self.PACKAGE_COLUMNS])
+        _configure_data_table(self.package_table, minimum_height=280)
         self.package_table.verticalHeader().setVisible(False)
         self.package_table.horizontalHeader().setStretchLastSection(True)
-        self.package_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.package_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         package_card.body_layout.addWidget(self.package_table)
         layout.addWidget(package_card)
@@ -1455,9 +1467,9 @@ class RelayWorkbenchPage(QWidget):
         route_card.body_layout.addWidget(self.route_summary_label)
         self.route_table = QTableWidget(0, len(self.ROUTE_COLUMNS))
         self.route_table.setHorizontalHeaderLabels([title for _, title, _ in self.ROUTE_COLUMNS])
+        _configure_data_table(self.route_table, minimum_height=260)
         self.route_table.verticalHeader().setVisible(False)
         self.route_table.horizontalHeader().setStretchLastSection(True)
-        self.route_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.route_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         route_card.body_layout.addWidget(self.route_table)
         route_actions = QHBoxLayout()
@@ -1774,8 +1786,10 @@ class RelayWorkbenchPage(QWidget):
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 item.setCheckState(Qt.CheckState.Checked if bool(value) else Qt.CheckState.Unchecked)
                 item.setText("")
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             else:
                 item.setText("" if value is None else str(value))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             table.setItem(row_index, column_index, item)
 
     def _row_mapping(self, table: QTableWidget, row_index: int, columns: list[tuple[str, str, str]]) -> dict[str, Any]:
@@ -1879,9 +1893,9 @@ class TemplatesPage(QWidget):
         self.create_file_button.clicked.connect(lambda: self.create_file_requested.emit())
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["ID", "名称", "类型", "更新时间"])
+        _configure_data_table(self.table, minimum_height=280)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         card.body_layout.addWidget(self.table)
         layout.addWidget(card)
@@ -1936,9 +1950,9 @@ class ExportHistoryPage(QWidget):
         card.body_layout.addWidget(self.summary_label)
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["ID", "类型", "标题", "数量", "时间"])
+        _configure_data_table(self.table, minimum_height=240)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         card.body_layout.addWidget(self.table)
         self.detail_text = QTextEdit()
@@ -2013,9 +2027,9 @@ class HistoryPage(QWidget):
         self.execution_table.setHorizontalHeaderLabels(
             ["ID", "任务类型", "开始时间", "状态", "总行数", "成功", "失败"]
         )
+        _configure_data_table(self.execution_table, minimum_height=240)
         self.execution_table.verticalHeader().setVisible(False)
         self.execution_table.horizontalHeader().setStretchLastSection(True)
-        self.execution_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.execution_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         history_card.body_layout.addWidget(self.execution_table)
 
@@ -2023,6 +2037,7 @@ class HistoryPage(QWidget):
         detail_layout = QVBoxLayout(detail_group)
         self.detail_table = QTableWidget(0, 5)
         self.detail_table.setHorizontalHeaderLabels(["行号", "会话", "结果", "错误码", "错误信息"])
+        _configure_data_table(self.detail_table, minimum_height=220)
         self.detail_table.verticalHeader().setVisible(False)
         self.detail_table.horizontalHeader().setStretchLastSection(True)
         detail_layout.addWidget(self.detail_table)

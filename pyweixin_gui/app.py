@@ -25,7 +25,7 @@ except ImportError:
 def main() -> int:
     try:
         from PySide6.QtGui import QIcon
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication, QStyleFactory
     except ImportError as exc:  # pragma: no cover - depends on runtime env
         print("PySide6 未安装，无法启动 GUI。请先安装 GUI 依赖。")
         print(exc)
@@ -46,6 +46,9 @@ def main() -> int:
     adapter = PyWeixinAdapter()
 
     app = QApplication(sys.argv)
+    fusion_style = QStyleFactory.create("Fusion")
+    if fusion_style is not None:
+        app.setStyle(fusion_style)
     icon_path = Path(__file__).resolve().parent / "assets" / "autowechat.ico"
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
