@@ -32,7 +32,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='pywechat-gui',
+    name='autowechat',
     icon=str(workspace / 'pyweixin_gui' / 'assets' / 'pywechat-gui.ico'),
     debug=False,
     bootloader_ignore_signals=False,
@@ -52,5 +52,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='pywechat-gui',
+    name='autowechat',
 )

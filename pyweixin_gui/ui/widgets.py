@@ -398,7 +398,7 @@ class DashboardPage(QWidget):
         layout.setSpacing(16)
 
         self.hero_card = CardFrame(hero=True)
-        title = QLabel("PyWeChat 办公助手")
+        title = QLabel("AutoWeChat 办公助手")
         title.setProperty("role", "pageTitle")
         subtitle = QLabel("把常见的微信批量发送工作，整理成清楚、可重复、可追踪的办公流程。")
         subtitle.setProperty("role", "pageSubtitle")

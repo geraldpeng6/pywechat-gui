@@ -27,7 +27,7 @@ git clone https://github.com/Hello-Mr-Crab/pywechat.git
 ```
 <br>
 
-### Windows GUI 工作台（批量消息/批量文件）
+### AutoWeChat Windows 工作台（批量消息/批量文件）
 适用于 `pyweixin(微信 4.1+)` 的 Windows 桌面 GUI 已包含在仓库中，默认提供：
 - 环境自检与连接测试
 - 批量消息表格编辑、Excel/CSV 导入导出
@@ -36,7 +36,7 @@ git clone https://github.com/Hello-Mr-Crab/pywechat.git
 - GUI 设置页与运行日志
 
 对外发给普通用户时，推荐只提供一个安装包：
-- `pywechat-gui-setup-版本.exe`
+- `autowechat-setup-版本.exe`
 - 用户双击安装即可，不需要 Python、pip 或任何额外依赖
 
 推荐发布方式：
@@ -55,7 +55,7 @@ python -m pyweixin_gui
 
 控制台入口：
 ```
-pywechat-gui
+autowechat
 ```
 
 Windows 本地构建：
@@ -67,26 +67,26 @@ pyinstaller pyweixin_gui.spec
 GitHub Actions 自动打包：
 - `.github/workflows/build-windows.yml`
 - 推送到 `main` 或手动触发后，会自动生成两类产物：
-- `pywechat-gui-setup-日期-短SHA.exe`
-- `pywechat-gui-windows-日期-短SHA.zip`
+- `autowechat-setup-日期-短SHA.exe`
+- `autowechat-windows-日期-短SHA.zip`
 
 GitHub Release 自动发布：
 - `.github/workflows/release-windows-installer.yml`
 - 推送 tag，如 `v1.0.0`
 - 会自动创建 Release，并上传：
-- `pywechat-gui-setup-1.0.0.exe`
-- `pywechat-gui-windows-1.0.0.zip`
+- `autowechat-setup-1.0.0.exe`
+- `autowechat-windows-1.0.0.zip`
 
 下载步骤：
 1. 打开仓库的 `Actions` 页面
 2. 点击最近一次成功的 `Build Windows Package`
 3. 在页面底部找到 `Artifacts`
-4. 优先下载名为 `pywechat-gui-setup-日期-短SHA` 的安装包
+4. 优先下载名为 `autowechat-setup-日期-短SHA` 的安装包
 5. Windows 用户双击安装包 exe 即可
 
 正式发布下载步骤：
 1. 打开仓库的 `Releases` 页面
-2. 下载最新版本里的 `pywechat-gui-setup-版本.exe`
+2. 下载最新版本里的 `autowechat-setup-版本.exe`
 3. Windows 用户双击安装
 
 注意：

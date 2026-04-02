@@ -1,4 +1,4 @@
-#define MyAppName "PyWeChat GUI 工作台"
+#define MyAppName "AutoWeChat 工作台"
 #ifndef MyAppVersion
   #define MyAppVersion "0.1.0"
 #endif
@@ -9,13 +9,13 @@
   #define MyAppURL "https://github.com/Hello-Mr-Crab/pywechat"
 #endif
 #ifndef MyAppExeName
-  #define MyAppExeName "pywechat-gui.exe"
+  #define MyAppExeName "autowechat.exe"
 #endif
 #ifndef MyOutputBaseFilename
-  #define MyOutputBaseFilename "pywechat-gui-setup"
+  #define MyOutputBaseFilename "autowechat-setup"
 #endif
 #ifndef MySourceDir
-  #define MySourceDir "..\dist\pywechat-gui"
+  #define MySourceDir "..\dist\autowechat"
 #endif
 
 [Setup]
@@ -26,8 +26,8 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={autopf}\PyWeChat GUI
-DefaultGroupName=PyWeChat GUI 工作台
+DefaultDirName={autopf}\AutoWeChat
+DefaultGroupName=AutoWeChat 工作台
 UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupIconFile=assets\pywechat-gui.ico
 LicenseFile=..\LICENSE
@@ -49,8 +49,8 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\PyWeChat GUI 工作台"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\PyWeChat GUI 工作台"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\AutoWeChat 工作台"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\AutoWeChat 工作台"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "启动 PyWeChat GUI"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "启动 AutoWeChat"; Flags: nowait postinstall skipifsilent

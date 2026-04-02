@@ -31,7 +31,7 @@ extras_require={
 },
 entry_points={
     'console_scripts': [
-        'pywechat-gui=pyweixin_gui.app:main',
+        'autowechat=pyweixin_gui.app:main',
     ]
 }
 )

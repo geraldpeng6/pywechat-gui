@@ -74,7 +74,7 @@ class MainWindow(QMainWindow):
         self._export_history_cache: list[ExportHistoryRecord] = []
         self._last_deleted_template: TaskTemplate | None = None
 
-        self.setWindowTitle("PyWeChat GUI 工作台")
+        self.setWindowTitle("AutoWeChat 工作台")
         self.resize(self.settings.window_width, self.settings.window_height)
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -143,7 +143,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "首次使用提示",
-            "欢迎使用 PyWeChat 办公助手。\n\n"
+            "欢迎使用 AutoWeChat 办公助手。\n\n"
             "推荐你按这个顺序操作：\n"
             "1. 首页检查微信状态\n"
             "2. 去批量页面导入或填写表格\n"
