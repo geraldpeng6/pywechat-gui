@@ -31,8 +31,12 @@ class RelayWorkbenchPageTestCase(unittest.TestCase):
         page.package_name_input.setText("周报发送")
         page.message_limit_spin.setValue(42)
         page.file_limit_spin.setValue(9)
-        page.collect_mode_combo.setCurrentIndex(page.collect_mode_combo.findData(RelayCollectMode.PERIOD))
-        page.collect_recent_combo.setCurrentIndex(page.collect_recent_combo.findData(RelayRecentRange.MONTH))
+        page.collect_mode_combo.setCurrentIndex(
+            page.collect_mode_combo.findData(RelayCollectMode.PERIOD.value)
+        )
+        page.collect_recent_combo.setCurrentIndex(
+            page.collect_recent_combo.findData(RelayRecentRange.MONTH.value)
+        )
         page.collect_sender_chips.set_values(["张三", "李四"])
         page.append_package_rows([RelayPackageRow(sequence=1, item_type=RelayItemType.TEXT, content="第一条")])
         page.append_route_rows([RelayRouteRow(downstream_session="客户群")])

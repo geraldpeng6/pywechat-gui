@@ -1660,13 +1660,13 @@ class RelayWorkbenchPage(QWidget):
         self.file_limit_spin.setValue(10)
         _set_compact_width(self.file_limit_spin, 120)
         self.collect_mode_combo = QComboBox()
-        self.collect_mode_combo.addItem("最近N条", RelayCollectMode.COUNT)
-        self.collect_mode_combo.addItem("按时间段", RelayCollectMode.PERIOD)
+        self.collect_mode_combo.addItem("最近N条", RelayCollectMode.COUNT.value)
+        self.collect_mode_combo.addItem("按时间段", RelayCollectMode.PERIOD.value)
         self.collect_recent_combo = QComboBox()
-        self.collect_recent_combo.addItem("今天", RelayRecentRange.TODAY)
-        self.collect_recent_combo.addItem("昨天", RelayRecentRange.YESTERDAY)
-        self.collect_recent_combo.addItem("本周", RelayRecentRange.WEEK)
-        self.collect_recent_combo.addItem("本月", RelayRecentRange.MONTH)
+        self.collect_recent_combo.addItem("今天", RelayRecentRange.TODAY.value)
+        self.collect_recent_combo.addItem("昨天", RelayRecentRange.YESTERDAY.value)
+        self.collect_recent_combo.addItem("本周", RelayRecentRange.WEEK.value)
+        self.collect_recent_combo.addItem("本月", RelayRecentRange.MONTH.value)
         message_limit_label = QLabel("文字上限")
         message_limit_label.setProperty("role", "muted")
         file_limit_label = QLabel("文件上限")
@@ -1920,11 +1920,13 @@ class RelayWorkbenchPage(QWidget):
 
     def current_collect_mode(self) -> RelayCollectMode:
         value = self.collect_mode_combo.currentData()
-        return value if isinstance(value, RelayCollectMode) else RelayCollectMode.COUNT
+        coerced = coerce_relay_collect_mode(value)
+        return coerced if isinstance(coerced, RelayCollectMode) else RelayCollectMode.COUNT
 
     def current_recent_range(self) -> RelayRecentRange:
         value = self.collect_recent_combo.currentData()
-        return value if isinstance(value, RelayRecentRange) else RelayRecentRange.TODAY
+        coerced = coerce_relay_recent_range(value)
+        return coerced if isinstance(coerced, RelayRecentRange) else RelayRecentRange.TODAY
 
     @staticmethod
     def _coerce_positive_spin_value(value: Any, default: int) -> int:
@@ -1933,6 +1935,18 @@ class RelayWorkbenchPage(QWidget):
         except (TypeError, ValueError):
             return default
         return parsed if parsed > 0 else default
+
+    @staticmethod
+    def _combo_data_matches(candidate: Any, expected: Any) -> bool:
+        candidate_value = getattr(candidate, "value", candidate)
+        expected_value = getattr(expected, "value", expected)
+        return str(candidate_value).strip().lower() == str(expected_value).strip().lower()
+
+    def _set_combo_value(self, combo: QComboBox, expected: Any) -> None:
+        for index in range(combo.count()):
+            if self._combo_data_matches(combo.itemData(index), expected):
+                combo.setCurrentIndex(index)
+                return
 
     def _sync_collect_mode(self) -> None:
         is_period = self.current_collect_mode() is RelayCollectMode.PERIOD
@@ -1996,13 +2010,11 @@ class RelayWorkbenchPage(QWidget):
         collect_mode = coerce_relay_collect_mode(collect_settings.get("collect_mode", RelayCollectMode.COUNT))
         if not isinstance(collect_mode, RelayCollectMode):
             collect_mode = RelayCollectMode.COUNT
-        collect_mode_index = self.collect_mode_combo.findData(collect_mode)
-        self.collect_mode_combo.setCurrentIndex(collect_mode_index if collect_mode_index >= 0 else 0)
+        self._set_combo_value(self.collect_mode_combo, collect_mode)
         recent_range = coerce_relay_recent_range(collect_settings.get("recent_range", RelayRecentRange.TODAY))
         if not isinstance(recent_range, RelayRecentRange):
             recent_range = RelayRecentRange.TODAY
-        recent_range_index = self.collect_recent_combo.findData(recent_range)
-        self.collect_recent_combo.setCurrentIndex(recent_range_index if recent_range_index >= 0 else 0)
+        self._set_combo_value(self.collect_recent_combo, recent_range)
         self.collect_sender_chips.set_values(
             [
                 part.strip()
