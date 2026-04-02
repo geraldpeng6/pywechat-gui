@@ -2,7 +2,7 @@
 ![image](https://github.com/Hello-Mr-Crab/pywechat/blob/main/pics/wechat.png)
 ## 🍬🍬微信RPA工具,现支持4.1+部分功能具体使用方法见：
 
-https://github.com/Hello-Mr-Crab/pywechat/blob/main/Weixin4.0.md
+[docs/Weixin4.0.md](docs/Weixin4.0.md)
 
 ### pywechat是一个基于pywinauto实现的Windows系统下PC微信自动化(pure uiautomation)的Python项目(不涉及逆向Hook操作),实现了PC微信内置的大部分功能。
 
@@ -100,7 +100,7 @@ GitHub Release 自动发布：
 说明：
 - GUI 只面向 `pyweixin`，不兼容旧版 `pywechat`
 - 建议在 Windows 10/11 上使用
-- 若微信主界面无法识别，请参考 `Weixin4.0.md` 中的讲述人/无障碍说明
+- 若微信主界面无法识别，请参考 `docs/Weixin4.0.md` 中的讲述人/无障碍说明
 <br>
 
 ### 获取方法（3.9+微信）:
@@ -300,7 +300,7 @@ for url,text in urls.items():
 
 <br>
 
-#### 其他类内method使用方法可见代码中详细的文档注释以及pyweixin操作手册.docx
+#### 其他类内method使用方法可见代码中详细的文档注释以及 `docs/pyweixin操作手册.docx`
 <br>
 
 ### Pywechat模块介绍
