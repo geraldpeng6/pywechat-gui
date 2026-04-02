@@ -419,6 +419,18 @@ class RelayItemType(str, Enum):
     IMAGE = "image"
 
 
+class RelayCollectMode(str, Enum):
+    COUNT = "count"
+    PERIOD = "period"
+
+
+class RelayRecentRange(str, Enum):
+    TODAY = "today"
+    YESTERDAY = "yesterday"
+    WEEK = "week"
+    MONTH = "month"
+
+
 def coerce_relay_item_type(value: RelayItemType | str) -> RelayItemType:
     if isinstance(value, RelayItemType):
         return value
@@ -432,6 +444,36 @@ def coerce_relay_item_type(value: RelayItemType | str) -> RelayItemType:
         "图片": RelayItemType.IMAGE,
     }
     return mapping.get(normalized, RelayItemType.TEXT)
+
+
+def coerce_relay_collect_mode(value: RelayCollectMode | str) -> RelayCollectMode | str:
+    if isinstance(value, RelayCollectMode):
+        return value
+    normalized = _normalize_text(value).lower()
+    mapping = {
+        RelayCollectMode.COUNT.value: RelayCollectMode.COUNT,
+        "count": RelayCollectMode.COUNT,
+        RelayCollectMode.PERIOD.value: RelayCollectMode.PERIOD,
+        "period": RelayCollectMode.PERIOD,
+    }
+    return mapping.get(normalized, normalized)
+
+
+def coerce_relay_recent_range(value: RelayRecentRange | str) -> RelayRecentRange | str:
+    if isinstance(value, RelayRecentRange):
+        return value
+    normalized = _normalize_text(value).lower()
+    mapping = {
+        RelayRecentRange.TODAY.value: RelayRecentRange.TODAY,
+        "today": RelayRecentRange.TODAY,
+        RelayRecentRange.YESTERDAY.value: RelayRecentRange.YESTERDAY,
+        "yesterday": RelayRecentRange.YESTERDAY,
+        RelayRecentRange.WEEK.value: RelayRecentRange.WEEK,
+        "week": RelayRecentRange.WEEK,
+        RelayRecentRange.MONTH.value: RelayRecentRange.MONTH,
+        "month": RelayRecentRange.MONTH,
+    }
+    return mapping.get(normalized, normalized)
 
 
 @dataclass
@@ -515,28 +557,56 @@ class RelayRouteRow:
 class RelayCollectTextRequest:
     source_session: str
     message_limit: int = 20
+    collect_mode: RelayCollectMode = RelayCollectMode.COUNT
+    recent_range: RelayRecentRange = RelayRecentRange.TODAY
+    sender_names: str = ""
+
+    def __post_init__(self) -> None:
+        self.collect_mode = coerce_relay_collect_mode(self.collect_mode)  # type: ignore[assignment]
+        self.recent_range = coerce_relay_recent_range(self.recent_range)  # type: ignore[assignment]
 
     def validate(self) -> dict[str, str]:
         errors: dict[str, str] = {}
         if not self.source_session.strip():
-            errors["source_session"] = "请先填写上游会话"
+            errors["source_session"] = "请先填写来源会话"
         if self.message_limit <= 0:
-            errors["message_limit"] = "消息条数必须大于 0"
+            errors["message_limit"] = "消息数量必须大于 0"
+        if not isinstance(self.collect_mode, RelayCollectMode):
+            errors["collect_mode"] = "请选择有效的采集方式"
+        if self.collect_mode is RelayCollectMode.PERIOD and not isinstance(self.recent_range, RelayRecentRange):
+            errors["recent_range"] = "请选择有效的时间范围"
         return errors
+
+    def sender_name_list(self) -> list[str]:
+        return split_pipe_values(self.sender_names)
 
 
 @dataclass
 class RelayCollectFilesRequest:
     source_session: str
     file_limit: int = 10
+    collect_mode: RelayCollectMode = RelayCollectMode.COUNT
+    recent_range: RelayRecentRange = RelayRecentRange.TODAY
+    sender_names: str = ""
+
+    def __post_init__(self) -> None:
+        self.collect_mode = coerce_relay_collect_mode(self.collect_mode)  # type: ignore[assignment]
+        self.recent_range = coerce_relay_recent_range(self.recent_range)  # type: ignore[assignment]
 
     def validate(self) -> dict[str, str]:
         errors: dict[str, str] = {}
         if not self.source_session.strip():
-            errors["source_session"] = "请先填写上游会话"
+            errors["source_session"] = "请先填写来源会话"
         if self.file_limit <= 0:
             errors["file_limit"] = "文件数量必须大于 0"
+        if not isinstance(self.collect_mode, RelayCollectMode):
+            errors["collect_mode"] = "请选择有效的采集方式"
+        if self.collect_mode is RelayCollectMode.PERIOD and not isinstance(self.recent_range, RelayRecentRange):
+            errors["recent_range"] = "请选择有效的时间范围"
         return errors
+
+    def sender_name_list(self) -> list[str]:
+        return split_pipe_values(self.sender_names)
 
 
 @dataclass

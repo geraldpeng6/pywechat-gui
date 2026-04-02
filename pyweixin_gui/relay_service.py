@@ -12,8 +12,10 @@ from .adapter import PyWeixinAdapter
 from .import_export import dump_table, load_table_rows
 from .models import (
     RelayCollectFilesRequest,
+    RelayCollectMode,
     RelayCollectMediaRequest,
     RelayCollectionResult,
+    RelayRecentRange,
     RelayCollectTextRequest,
     RelayItemType,
     RelayPackageExportRequest,
@@ -57,13 +59,66 @@ class RelayService:
         errors = request.validate()
         if errors:
             raise ValueError(next(iter(errors.values())))
-        if on_progress:
-            on_progress("正在采集来源会话里的文字消息...")
-        messages, timestamps = self.adapter.dump_chat_history(
-            session_name=request.source_session,
-            number=request.message_limit,
-            options=runtime_options,
-        )
+        sender_filters = request.sender_name_list()
+        sender_filter_set = set(sender_filters)
+        filtered_sender_count = 0
+        if sender_filters:
+            if on_progress:
+                on_progress("正在按指定群成员筛选文字消息...")
+            items = self.adapter.dump_chat_history_items(
+                session_name=request.source_session,
+                number=request.message_limit,
+                options=runtime_options,
+                recent_range=request.recent_range if request.collect_mode is RelayCollectMode.PERIOD else None,
+            )
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            skipped_media: Counter[str] = Counter()
+            text_entries = []
+            for item in items:
+                sender = str(item.get("sender", "") or "").strip()
+                if sender and sender not in sender_filter_set:
+                    filtered_sender_count += 1
+                    continue
+                message_text = str(item.get("content", "") or "").strip()
+                if not message_text:
+                    continue
+                placeholder_label = self._placeholder_media_label(message_text)
+                if placeholder_label:
+                    skipped_media[placeholder_label] += 1
+                    continue
+                timestamp = str(item.get("timestamp", "") or "").strip() or now
+                text_entries.append((message_text, timestamp))
+            text_entries.reverse()
+            rows = [
+                RelayPackageRow(
+                    sequence=index,
+                    item_type=RelayItemType.TEXT,
+                    source_session=request.source_session,
+                    content=message,
+                    collected_at=timestamp,
+                )
+                for index, (message, timestamp) in enumerate(text_entries, start=1)
+            ]
+            warning = self._collect_text_warning(request, rows, skipped_media, filtered_sender_count, sender_filters)
+            return RelayCollectionResult(source_session=request.source_session, rows=rows, warning=warning)
+
+        if request.collect_mode is RelayCollectMode.PERIOD:
+            if on_progress:
+                on_progress(f"正在采集{self._recent_range_label(request.recent_range)}的文字消息...")
+            messages, timestamps = self.adapter.dump_recent_chat_history(
+                session_name=request.source_session,
+                recent_range=request.recent_range,
+                number=request.message_limit,
+                options=runtime_options,
+            )
+        else:
+            if on_progress:
+                on_progress("正在采集来源会话里的文字消息...")
+            messages, timestamps = self.adapter.dump_chat_history(
+                session_name=request.source_session,
+                number=request.message_limit,
+                options=runtime_options,
+            )
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         skipped_media: Counter[str] = Counter()
         text_entries = []
@@ -93,11 +148,7 @@ class RelayService:
             )
             for index, (message, timestamp) in enumerate(text_entries, start=1)
         ]
-        warning = "" if rows else "当前没有采集到可转发的文本消息。"
-        if skipped_media:
-            media_summary = "、".join(f"{label}{count}条" for label, count in skipped_media.items())
-            extra = f"已自动跳过 {media_summary}。如需把这些内容继续加入发送列表，可再点“采集图片/视频”或手动补入本地素材。"
-            warning = f"{warning} {extra}".strip()
+        warning = self._collect_text_warning(request, rows, skipped_media, filtered_sender_count, sender_filters)
         return RelayCollectionResult(source_session=request.source_session, rows=rows, warning=warning)
 
     def collect_file_rows(
@@ -109,18 +160,69 @@ class RelayService:
         errors = request.validate()
         if errors:
             raise ValueError(next(iter(errors.values())))
-        if on_progress:
-            on_progress("正在采集上游聊天文件...")
+        sender_filters = request.sender_name_list()
+        sender_filter_set = set(sender_filters)
+        if sender_filters:
+            if on_progress:
+                on_progress("正在按指定群成员筛选聊天文件...")
+            cache_dir = self._relay_cache_dir(request.source_session)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            items = self.adapter.list_chat_file_items(
+                session_name=request.source_session,
+                number=request.file_limit,
+                options=runtime_options,
+                recent_range=request.recent_range if request.collect_mode is RelayCollectMode.PERIOD else None,
+            )
+            copied_paths: list[Path] = []
+            filtered_sender_count = 0
+            for item in items:
+                sender = str(item.get("sender", "") or "").strip()
+                if sender and sender not in sender_filter_set:
+                    filtered_sender_count += 1
+                    continue
+                source_path = Path(str(item.get("source_path", "") or ""))
+                if not source_path.is_file():
+                    continue
+                copied_paths.append(self._copy_file_to_cache(source_path, cache_dir))
+            rows = []
+            for index, file_path in enumerate(copied_paths[: request.file_limit], start=1):
+                item_type = RelayItemType.IMAGE if file_path.suffix.lower() in IMAGE_SUFFIXES else RelayItemType.FILE
+                rows.append(
+                    RelayPackageRow(
+                        sequence=index,
+                        item_type=item_type,
+                        source_session=request.source_session,
+                        content=file_path.name,
+                        file_path=str(file_path),
+                        collected_at=datetime.fromtimestamp(file_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                )
+            warning = self._collect_file_warning(request, rows, filtered_sender_count, sender_filters)
+            return RelayCollectionResult(source_session=request.source_session, rows=rows, warning=warning)
+
         cache_dir = self._relay_cache_dir(request.source_session)
         cache_dir.mkdir(parents=True, exist_ok=True)
         warning = ""
         try:
-            self.adapter.save_chat_files(
-                session_name=request.source_session,
-                number=request.file_limit,
-                target_folder=str(cache_dir),
-                options=runtime_options,
-            )
+            if request.collect_mode is RelayCollectMode.PERIOD:
+                if on_progress:
+                    on_progress(f"正在采集{self._recent_range_label(request.recent_range)}的聊天文件...")
+                self.adapter.save_recent_chat_files(
+                    session_name=request.source_session,
+                    recent_range=request.recent_range,
+                    number=request.file_limit,
+                    target_folder=str(cache_dir),
+                    options=runtime_options,
+                )
+            else:
+                if on_progress:
+                    on_progress("正在采集上游聊天文件...")
+                self.adapter.save_chat_files(
+                    session_name=request.source_session,
+                    number=request.file_limit,
+                    target_folder=str(cache_dir),
+                    options=runtime_options,
+                )
         except Exception as exc:
             if not self._looks_like_chat_file_parse_error(exc):
                 raise
@@ -143,7 +245,7 @@ class RelayService:
                 )
             )
         if not rows and not warning:
-            warning = "当前没有采集到可转发的聊天文件。"
+            warning = self._collect_file_warning(request, rows, 0, sender_filters)
         return RelayCollectionResult(source_session=request.source_session, rows=rows, warning=warning)
 
     def collect_media_rows(
@@ -502,6 +604,68 @@ class RelayService:
     def _placeholder_media_label(message: str) -> str | None:
         normalized = message.strip()
         return MEDIA_PLACEHOLDER_LABELS.get(normalized)
+
+    @staticmethod
+    def _recent_range_label(recent_range: RelayRecentRange | str) -> str:
+        mapping = {
+            RelayRecentRange.TODAY: "今天",
+            RelayRecentRange.YESTERDAY: "昨天",
+            RelayRecentRange.WEEK: "本周",
+            RelayRecentRange.MONTH: "本月",
+        }
+        return mapping.get(recent_range, "所选时间段")
+
+    @staticmethod
+    def _copy_file_to_cache(source_path: Path, cache_dir: Path) -> Path:
+        candidate = cache_dir / source_path.name
+        if not candidate.exists():
+            shutil.copy2(source_path, candidate)
+            return candidate
+        counter = 1
+        while True:
+            renamed = cache_dir / f"{source_path.stem}({counter}){source_path.suffix}"
+            if not renamed.exists():
+                shutil.copy2(source_path, renamed)
+                return renamed
+            counter += 1
+
+    def _collect_text_warning(
+        self,
+        request: RelayCollectTextRequest,
+        rows: list[RelayPackageRow],
+        skipped_media: Counter[str],
+        filtered_sender_count: int,
+        sender_filters: list[str],
+    ) -> str:
+        parts: list[str] = []
+        if not rows:
+            if request.collect_mode is RelayCollectMode.PERIOD:
+                parts.append(f"在{self._recent_range_label(request.recent_range)}范围内没有采集到可转发的文本消息。")
+            else:
+                parts.append("当前没有采集到可转发的文本消息。")
+        if filtered_sender_count and sender_filters:
+            parts.append(f"已按指定群成员筛掉 {filtered_sender_count} 条其他成员消息。")
+        if skipped_media:
+            media_summary = "、".join(f"{label}{count}条" for label, count in skipped_media.items())
+            parts.append(f"已自动跳过 {media_summary}。如需把这些内容继续加入发送列表，可再点“采集图片/视频”或手动补入本地素材。")
+        return " ".join(part for part in parts if part).strip()
+
+    def _collect_file_warning(
+        self,
+        request: RelayCollectFilesRequest,
+        rows: list[RelayPackageRow],
+        filtered_sender_count: int,
+        sender_filters: list[str],
+    ) -> str:
+        parts: list[str] = []
+        if not rows:
+            if request.collect_mode is RelayCollectMode.PERIOD:
+                parts.append(f"在{self._recent_range_label(request.recent_range)}范围内没有采集到可转发的聊天文件。")
+            else:
+                parts.append("当前没有采集到可转发的聊天文件。")
+        if filtered_sender_count and sender_filters:
+            parts.append(f"已按指定群成员筛掉 {filtered_sender_count} 条其他成员文件记录。")
+        return " ".join(part for part in parts if part).strip()
 
     @staticmethod
     def _sanitize_name(value: str) -> str:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from pyweixin_gui.models import FileBatchRow, MessageBatchRow, RelayItemType, RelayPackageRow, relay_template_from_json, relay_template_to_json
+from pyweixin_gui.models import FileBatchRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectMode, RelayCollectTextRequest, RelayItemType, RelayPackageRow, RelayRecentRange, relay_template_from_json, relay_template_to_json
 
 
 class ModelsTestCase(unittest.TestCase):
@@ -48,6 +48,28 @@ class ModelsTestCase(unittest.TestCase):
         self.assertEqual(package_rows[0].item_type, RelayItemType.TEXT)
         self.assertEqual(package_rows[1].item_type, RelayItemType.FILE)
         self.assertEqual(package_rows[2].item_type, RelayItemType.IMAGE)
+
+    def test_collect_text_request_accepts_period_mode(self):
+        request = RelayCollectTextRequest(
+            source_session="上游A",
+            message_limit=20,
+            collect_mode=RelayCollectMode.PERIOD,
+            recent_range=RelayRecentRange.WEEK,
+        )
+        self.assertEqual(request.validate(), {})
+
+    def test_collect_files_request_rejects_invalid_recent_range_in_period_mode(self):
+        request = RelayCollectFilesRequest(
+            source_session="上游A",
+            file_limit=10,
+            collect_mode="period",
+            recent_range="invalid",
+        )
+        self.assertIn("recent_range", request.validate())
+
+    def test_collect_request_sender_name_list(self):
+        request = RelayCollectTextRequest(source_session="上游A", sender_names="张三| 李四 |")
+        self.assertEqual(request.sender_name_list(), ["张三", "李四"])
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from unittest.mock import patch
 from pyweixin_gui.models import (
     RelayCollectFilesRequest,
     RelayCollectMediaRequest,
+    RelayCollectMode,
     RelayCollectTextRequest,
     RelayItemType,
     RelayPackageExportRequest,
@@ -23,8 +24,22 @@ from pyweixin_gui.relay_service import RelayService
 
 
 class FakeAdapter:
+    def __init__(self):
+        self.called_recent_text = False
+        self.called_recent_files = False
+
     def dump_chat_history(self, session_name, number, options):
         return ["较新的消息", "较早的消息"], ["今天 10:01", "今天 10:00"]
+
+    def dump_recent_chat_history(self, session_name, recent_range, number, options):
+        self.called_recent_text = True
+        return ["今天的消息"], ["今天 09:00"]
+
+    def dump_chat_history_items(self, session_name, number, options, recent_range=None):
+        return [
+            {"sender": "张三", "timestamp": "今天 10:01", "content": "张三的消息"},
+            {"sender": "李四", "timestamp": "今天 10:00", "content": "李四的消息"},
+        ]
 
     def save_chat_files(self, session_name, number, target_folder, options):
         folder = Path(target_folder)
@@ -32,6 +47,25 @@ class FakeAdapter:
         (folder / "报价单.pdf").write_text("demo", encoding="utf-8")
         (folder / "产品图.png").write_text("png", encoding="utf-8")
         return [str(folder / "报价单.pdf"), str(folder / "产品图.png")]
+
+    def save_recent_chat_files(self, session_name, recent_range, number, target_folder, options):
+        self.called_recent_files = True
+        folder = Path(target_folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "今天文件.pdf").write_text("demo", encoding="utf-8")
+        return [str(folder / "今天文件.pdf")]
+
+    def list_chat_file_items(self, session_name, number, options, recent_range=None):
+        folder = Path(self.temp_root) / "sources"
+        folder.mkdir(parents=True, exist_ok=True)
+        first = folder / "张三文件.pdf"
+        second = folder / "李四文件.pdf"
+        first.write_text("demo", encoding="utf-8")
+        second.write_text("demo", encoding="utf-8")
+        return [
+            {"sender": "张三", "timestamp": "今天 10:01", "source_path": str(first), "name": first.name},
+            {"sender": "李四", "timestamp": "今天 10:00", "source_path": str(second), "name": second.name},
+        ]
 
     def validate_session(self, session_name, options):
         if session_name == "找不到":
@@ -58,9 +92,11 @@ class FakeAdapter:
 
 class RelayServiceTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.service = RelayService(FakeAdapter())
+        self.adapter = FakeAdapter()
+        self.service = RelayService(self.adapter)
         self.options = RuntimeOptions()
         self.tempdir = TemporaryDirectory()
+        self.adapter.temp_root = self.tempdir.name
         self.env_patch = patch.dict(os.environ, {"AUTOWECHAT_HOME": self.tempdir.name})
         self.env_patch.start()
 
@@ -92,6 +128,38 @@ class RelayServiceTestCase(unittest.TestCase):
         result = self.service.collect_file_rows(RelayCollectFilesRequest(source_session="上游A", file_limit=5), self.options)
         self.assertEqual(len(result.rows), 2)
         self.assertIn(result.rows[0].item_type, {RelayItemType.FILE, RelayItemType.IMAGE})
+
+    def test_collect_text_rows_by_period(self):
+        result = self.service.collect_text_rows(
+            RelayCollectTextRequest(source_session="上游A", message_limit=20, collect_mode=RelayCollectMode.PERIOD),
+            self.options,
+        )
+        self.assertTrue(self.adapter.called_recent_text)
+        self.assertEqual(result.rows[0].content, "今天的消息")
+
+    def test_collect_text_rows_with_sender_filter(self):
+        result = self.service.collect_text_rows(
+            RelayCollectTextRequest(source_session="上游A", message_limit=20, sender_names="张三"),
+            self.options,
+        )
+        self.assertEqual(len(result.rows), 1)
+        self.assertEqual(result.rows[0].content, "张三的消息")
+
+    def test_collect_file_rows_by_period(self):
+        result = self.service.collect_file_rows(
+            RelayCollectFilesRequest(source_session="上游A", file_limit=5, collect_mode=RelayCollectMode.PERIOD),
+            self.options,
+        )
+        self.assertTrue(self.adapter.called_recent_files)
+        self.assertEqual(result.rows[0].content, "今天文件.pdf")
+
+    def test_collect_file_rows_with_sender_filter(self):
+        result = self.service.collect_file_rows(
+            RelayCollectFilesRequest(source_session="上游A", file_limit=5, sender_names="李四"),
+            self.options,
+        )
+        self.assertEqual(len(result.rows), 1)
+        self.assertEqual(result.rows[0].content, "李四文件.pdf")
 
     def test_collect_media_rows(self):
         result = self.service.collect_media_rows(RelayCollectMediaRequest(source_session="上游A", media_limit=5), self.options)

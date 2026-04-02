@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..import_export import dump_route_rows, dump_rows, dump_table, load_route_rows, load_rows, load_session_names
-from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectMediaRequest, RelayCollectTextRequest, RelayItemType, RelayPackageExportRequest, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelayValidationRequest, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row, coerce_resource_export_kind
+from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectMediaRequest, RelayCollectMode, RelayCollectTextRequest, RelayItemType, RelayPackageExportRequest, RelayPackageRow, RelayRecentRange, RelayRouteRow, RelaySendRequest, RelayValidationRequest, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row, coerce_resource_export_kind
 
 
 @dataclass
@@ -1515,6 +1515,8 @@ class RelayWorkbenchPage(QWidget):
         self.source_session_input.setPlaceholderText("可选，例如：客户A项目群")
         self.package_name_input = QLineEdit()
         self.package_name_input.setPlaceholderText("可选，例如：4月客户回传")
+        self.collect_sender_input = QLineEdit()
+        self.collect_sender_input.setPlaceholderText("可选，仅群聊时使用，多个成员用 | 分隔")
         self.message_limit_spin = QSpinBox()
         self.message_limit_spin.setRange(1, 500)
         self.message_limit_spin.setValue(20)
@@ -1523,13 +1525,24 @@ class RelayWorkbenchPage(QWidget):
         self.file_limit_spin.setRange(1, 200)
         self.file_limit_spin.setValue(10)
         _set_compact_width(self.file_limit_spin, 120)
-        message_limit_label = QLabel("文字")
+        self.collect_mode_combo = QComboBox()
+        self.collect_mode_combo.addItem("最近N条", RelayCollectMode.COUNT)
+        self.collect_mode_combo.addItem("按时间段", RelayCollectMode.PERIOD)
+        self.collect_recent_combo = QComboBox()
+        self.collect_recent_combo.addItem("今天", RelayRecentRange.TODAY)
+        self.collect_recent_combo.addItem("昨天", RelayRecentRange.YESTERDAY)
+        self.collect_recent_combo.addItem("本周", RelayRecentRange.WEEK)
+        self.collect_recent_combo.addItem("本月", RelayRecentRange.MONTH)
+        message_limit_label = QLabel("文字上限")
         message_limit_label.setProperty("role", "muted")
-        file_limit_label = QLabel("文件/媒体")
+        file_limit_label = QLabel("文件上限")
         file_limit_label.setProperty("role", "muted")
         count_row = _flow_container(message_limit_label, self.message_limit_spin, file_limit_label, self.file_limit_spin, h_spacing=10)
         form.addRow("来源会话", self.source_session_input)
         form.addRow("任务名称", self.package_name_input)
+        form.addRow("群成员筛选", self.collect_sender_input)
+        form.addRow("采集方式", self.collect_mode_combo)
+        form.addRow("时间范围", self.collect_recent_combo)
         form.addRow("采集数量", count_row)
         source_card.body_layout.addLayout(form)
 
@@ -1638,6 +1651,7 @@ class RelayWorkbenchPage(QWidget):
         self.collect_texts_button.clicked.connect(self._request_collect_texts)
         self.collect_files_button.clicked.connect(self._request_collect_files)
         self.collect_media_button.clicked.connect(self._request_collect_media)
+        self.collect_mode_combo.currentIndexChanged.connect(self._sync_collect_mode)
         self.import_folder_button.clicked.connect(self._request_import_folder)
         self.export_package_button.clicked.connect(self._request_export_package)
         self.save_template_button.clicked.connect(self._request_save_template)
@@ -1662,6 +1676,7 @@ class RelayWorkbenchPage(QWidget):
 
         self._configure_package_columns()
         self._configure_route_columns()
+        self._sync_collect_mode()
         self.set_running_state(False)
 
     def _configure_package_columns(self) -> None:
@@ -1680,6 +1695,9 @@ class RelayWorkbenchPage(QWidget):
         request = RelayCollectTextRequest(
             source_session=self.source_session_input.text().strip(),
             message_limit=self.message_limit_spin.value(),
+            collect_mode=self.current_collect_mode(),
+            recent_range=self.current_recent_range(),
+            sender_names=self.collect_sender_input.text().strip(),
         )
         errors = request.validate()
         if errors:
@@ -1691,6 +1709,9 @@ class RelayWorkbenchPage(QWidget):
         request = RelayCollectFilesRequest(
             source_session=self.source_session_input.text().strip(),
             file_limit=self.file_limit_spin.value(),
+            collect_mode=self.current_collect_mode(),
+            recent_range=self.current_recent_range(),
+            sender_names=self.collect_sender_input.text().strip(),
         )
         errors = request.validate()
         if errors:
@@ -1699,6 +1720,12 @@ class RelayWorkbenchPage(QWidget):
         self.collect_files_requested.emit(request)
 
     def _request_collect_media(self) -> None:
+        if self.collect_sender_input.text().strip():
+            QMessageBox.information(self, "采集图片/视频", "图片/视频当前还不支持按群成员筛选，请先清空群成员筛选后再采集。")
+            return
+        if self.current_collect_mode() is RelayCollectMode.PERIOD:
+            QMessageBox.information(self, "采集图片/视频", "图片/视频当前先按数量采集。时间段采集会在后续版本继续补强。")
+            return
         request = RelayCollectMediaRequest(
             source_session=self.source_session_input.text().strip(),
             media_limit=self.file_limit_spin.value(),
@@ -1714,6 +1741,22 @@ class RelayWorkbenchPage(QWidget):
             QMessageBox.information(self, "保存模板", "请先准备至少一条发送内容。")
             return
         self.save_template_requested.emit(TaskType.RELAY_SEND, self.template_payload())
+
+    def current_collect_mode(self) -> RelayCollectMode:
+        value = self.collect_mode_combo.currentData()
+        return value if isinstance(value, RelayCollectMode) else RelayCollectMode.COUNT
+
+    def current_recent_range(self) -> RelayRecentRange:
+        value = self.collect_recent_combo.currentData()
+        return value if isinstance(value, RelayRecentRange) else RelayRecentRange.TODAY
+
+    def _sync_collect_mode(self) -> None:
+        is_period = self.current_collect_mode() is RelayCollectMode.PERIOD
+        self.collect_recent_combo.setEnabled(is_period and not self._running)
+        if is_period:
+            self.package_summary_label.setText("当前采集方式为按时间段。文字和聊天文件会按今天、昨天、本周或本月筛选。")
+        elif not self.package_rows():
+            self.package_summary_label.setText("还没有发送内容。可以手动添加，也可以从聊天或文件夹导入。")
 
     def template_payload(self) -> dict[str, Any]:
         return {
@@ -2018,8 +2061,11 @@ class RelayWorkbenchPage(QWidget):
         for widget in [
             self.source_session_input,
             self.package_name_input,
+            self.collect_sender_input,
             self.message_limit_spin,
             self.file_limit_spin,
+            self.collect_mode_combo,
+            self.collect_recent_combo,
             self.collect_texts_button,
             self.collect_files_button,
             self.collect_media_button,
@@ -2043,6 +2089,7 @@ class RelayWorkbenchPage(QWidget):
             self.send_button,
         ]:
             widget.setEnabled(not is_running)
+        self.collect_recent_combo.setEnabled(not is_running and self.current_collect_mode() is RelayCollectMode.PERIOD)
 
     def _set_table_row(self, table: QTableWidget, row_index: int, columns: list[tuple[str, str, str]], values: dict[str, Any]) -> None:
         for column_index, (key, _, kind) in enumerate(columns):

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from pyweixin_gui.adapter import PyWeixinAdapter, UnsupportedPlatformError
-from pyweixin_gui.models import RuntimeOptions
+from pyweixin_gui.models import RelayRecentRange, RuntimeOptions
 
 
 class AdapterTestCase(unittest.TestCase):
@@ -71,6 +72,17 @@ class AdapterTestCase(unittest.TestCase):
             with patch.object(adapter, "_load_pyweixin", return_value=FakePyWeixin()):
                 rows = adapter.export_videos("2026", "04", tempdir)
         self.assertEqual(rows, [str(exported)])
+
+    def test_recent_label_range_helpers(self):
+        now = datetime(2026, 4, 2, 10, 0)
+        self.assertTrue(PyWeixinAdapter._recent_label_in_range("09:30", recent_range=RelayRecentRange.TODAY, now=now))
+        self.assertTrue(PyWeixinAdapter._recent_label_in_range("昨天 18:20", recent_range=RelayRecentRange.YESTERDAY, now=now))
+        self.assertTrue(PyWeixinAdapter._recent_label_in_range("星期三 12:00", recent_range=RelayRecentRange.WEEK, now=datetime(2026, 4, 2, 10, 0)))
+        self.assertFalse(PyWeixinAdapter._recent_label_in_range("3月28日 09:00", recent_range=RelayRecentRange.WEEK, now=now))
+
+    def test_parse_recent_label_date_handles_month_day_without_year(self):
+        parsed = PyWeixinAdapter._parse_recent_label_date("4月1日 09:30", datetime(2026, 4, 2, 10, 0))
+        self.assertEqual(parsed.isoformat(), "2026-04-01")
 
 
 if __name__ == "__main__":
