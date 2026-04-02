@@ -165,10 +165,7 @@ class RelayService:
             target_folder=str(cache_dir),
             options=runtime_options,
         )
-        files = sorted(
-            [Path(path) for path in saved_paths if Path(path).is_file()],
-            key=lambda item: item.stat().st_mtime,
-        )
+        files = [Path(path) for path in reversed(saved_paths) if Path(path).is_file()]
         rows: list[RelayPackageRow] = []
         for index, file_path in enumerate(files, start=1):
             item_type = RelayItemType.IMAGE if file_path.suffix.lower() in IMAGE_SUFFIXES else RelayItemType.FILE

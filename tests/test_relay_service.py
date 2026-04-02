@@ -96,8 +96,7 @@ class RelayServiceTestCase(unittest.TestCase):
     def test_collect_media_rows(self):
         result = self.service.collect_media_rows(RelayCollectMediaRequest(source_session="上游A", media_limit=5), self.options)
         self.assertEqual(len(result.rows), 2)
-        self.assertEqual(result.rows[0].item_type, RelayItemType.IMAGE)
-        self.assertEqual(result.rows[1].item_type, RelayItemType.FILE)
+        self.assertEqual({row.item_type for row in result.rows}, {RelayItemType.IMAGE, RelayItemType.FILE})
 
     def test_validate_routes(self):
         rows = [

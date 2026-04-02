@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
 import platform
 from pathlib import Path
-import re
 import time
 
 from .error_handling import UiError, map_exception
@@ -152,12 +150,10 @@ class PyWeixinAdapter:
         )
 
     def save_chat_media(self, session_name: str, number: int, target_folder: str, options: RuntimeOptions) -> list[str]:
-        pyweixin = self._load_pyweixin()
         from pywinauto import Desktop
         import pyautogui
 
         from pyweixin.WeChatTools import Navigator
-        from pyweixin.WinSettings import SystemSettings
 
         target_dir = Path(target_folder).expanduser().resolve()
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -184,8 +180,8 @@ class PyWeixinAdapter:
         chat_history_window.close()
 
         desktop = Desktop(backend="uia")
-        preview_window = desktop.window(control_type="Window", class_name="mmui::PreviewWindow")
-        if not preview_window.exists(timeout=3):
+        preview_window = self._find_preview_window(desktop)
+        if preview_window is None or not preview_window.exists(timeout=3):
             return []
 
         saved_paths: list[str] = []
@@ -201,14 +197,14 @@ class PyWeixinAdapter:
                     break
                 continue
 
-            before_names = {path.name for path in target_dir.iterdir() if path.is_file()}
-            save_button = preview_window.child_window(title_re="另存为|Save as|另存為", control_type="Button")
-            if save_button.exists(timeout=1):
-                save_button.click_input()
-                saved_path = self._save_preview_to_folder(target_dir, before_names)
-                if saved_path:
-                    saved_paths.append(saved_path)
-                    saved_count += 1
+            saved_path: str | None = None
+            if media_kind == "image":
+                saved_path = self._capture_preview_image(preview_window, target_dir, session_name, saved_count + 1)
+            elif media_kind == "video":
+                saved_path = self._save_preview_video(preview_window, target_dir)
+            if saved_path:
+                saved_paths.append(saved_path)
+                saved_count += 1
 
             self._move_preview_to_previous(pyautogui)
             if self._is_preview_at_first(preview_window):
@@ -324,6 +320,18 @@ class PyWeixinAdapter:
         return None
 
     @staticmethod
+    def _find_preview_window(desktop):
+        selectors = [
+            {"control_type": "Window", "class_name": "mmui::PreviewWindow"},
+            {"control_type": "Window", "class_name": "ImagePreviewWnd", "framework_id": "Win32"},
+        ]
+        for selector in selectors:
+            widget = desktop.window(**selector)
+            if widget.exists(timeout=0.5):
+                return widget
+        return None
+
+    @staticmethod
     def _detect_preview_media_kind(preview_window) -> str | None:
         image_expired = preview_window.child_window(
             title_re="图片过期或已被清理|Image expired or deleted|圖片過期或已被刪除",
@@ -352,6 +360,45 @@ class PyWeixinAdapter:
             control_type="Text",
         )
         return earliest_text.exists(timeout=0.2)
+
+    @staticmethod
+    def _capture_preview_image(preview_window, target_dir: Path, session_name: str, index: int) -> str | None:
+        candidates = preview_window.descendants(control_type="Button", title="")
+        if not candidates:
+            return None
+        image_button = max(
+            candidates,
+            key=lambda item: max(1, item.rectangle().width()) * max(1, item.rectangle().height()),
+        )
+        image_area = image_button.parent()
+        if image_area is None:
+            return None
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        safe_name = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in session_name).strip("_") or "chat"
+        path = target_dir / f"{safe_name}-图片-{timestamp}-{index:03d}.png"
+        image = image_area.capture_as_image()
+        image.save(path)
+        return str(path)
+
+    @staticmethod
+    def _save_preview_video(preview_window, target_dir: Path) -> str | None:
+        video_player = preview_window.child_window(title="player video", control_type="Pane")
+        save_button = preview_window.child_window(title_re="另存为|Save as|另存為", control_type="Button")
+        if video_player.exists(timeout=0.5):
+            try:
+                video_player.wait(wait_for="ready", timeout=15, retry_interval=0.3)
+            except Exception:
+                pass
+        if save_button.exists(timeout=1):
+            try:
+                save_button.wait(wait_for="enabled", timeout=3, retry_interval=0.3)
+            except Exception:
+                pass
+        if not save_button.exists(timeout=0.5):
+            return None
+        before_names = {path.name for path in target_dir.iterdir() if path.is_file()}
+        save_button.click_input()
+        return PyWeixinAdapter._save_preview_to_folder(target_dir, before_names)
 
     @staticmethod
     def _save_preview_to_folder(target_dir: Path, before_names: set[str]) -> str | None:
