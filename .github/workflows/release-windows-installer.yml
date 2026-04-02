@@ -11,6 +11,9 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+  WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+  WINDOWS_CODESIGN_TIMESTAMP_URL: ${{ vars.WINDOWS_CODESIGN_TIMESTAMP_URL }}
 
 jobs:
   release-windows:
@@ -52,6 +55,32 @@ jobs:
       - name: Build Windows package
         run: pyinstaller pyweixin_gui.spec --noconfirm
 
+      - name: Prepare code signing certificate
+        if: ${{ env.WINDOWS_CODESIGN_PFX_BASE64 != '' && env.WINDOWS_CODESIGN_PFX_PASSWORD != '' }}
+        shell: pwsh
+        run: |
+          $certDir = Join-Path $env:RUNNER_TEMP "codesign"
+          New-Item -ItemType Directory -Path $certDir -Force | Out-Null
+          $certPath = Join-Path $certDir "autowechat-codesign.pfx"
+          [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_BASE64))
+          "WINDOWS_CODESIGN_CERT_PATH=$certPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Skip code signing
+        if: ${{ env.WINDOWS_CODESIGN_PFX_BASE64 == '' || env.WINDOWS_CODESIGN_PFX_PASSWORD == '' }}
+        shell: pwsh
+        run: Write-Host "未配置 Windows 代码签名证书，当前 release 将生成未签名产物。"
+
+      - name: Sign packaged binaries
+        if: ${{ env.WINDOWS_CODESIGN_PFX_BASE64 != '' && env.WINDOWS_CODESIGN_PFX_PASSWORD != '' }}
+        shell: pwsh
+        run: |
+          ./scripts/sign-windows.ps1 `
+            -CertificatePath $env:WINDOWS_CODESIGN_CERT_PATH `
+            -CertificatePassword $env:WINDOWS_CODESIGN_PFX_PASSWORD `
+            -InputPaths @("dist/autowechat") `
+            -TimestampUrl $(if ($env:WINDOWS_CODESIGN_TIMESTAMP_URL) { $env:WINDOWS_CODESIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }) `
+            -Description "AutoWeChat"
+
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
@@ -65,6 +94,17 @@ jobs:
             "/DMyOutputBaseFilename=$env:INSTALLER_BASENAME" `
             "/DMySourceDir=$sourceDir" `
             "installer\windows.iss"
+
+      - name: Sign installer
+        if: ${{ env.WINDOWS_CODESIGN_PFX_BASE64 != '' && env.WINDOWS_CODESIGN_PFX_PASSWORD != '' }}
+        shell: pwsh
+        run: |
+          ./scripts/sign-windows.ps1 `
+            -CertificatePath $env:WINDOWS_CODESIGN_CERT_PATH `
+            -CertificatePassword $env:WINDOWS_CODESIGN_PFX_PASSWORD `
+            -InputPaths @("dist/$env:INSTALLER_BASENAME.exe") `
+            -TimestampUrl $(if ($env:WINDOWS_CODESIGN_TIMESTAMP_URL) { $env:WINDOWS_CODESIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }) `
+            -Description "AutoWeChat Setup"
 
       - name: Archive build output
         shell: pwsh
@@ -97,4 +137,12 @@ jobs:
               --title $tag `
               --generate-notes `
               --verify-tag
+          }
+
+      - name: Cleanup code signing certificate
+        if: ${{ always() && env.WINDOWS_CODESIGN_PFX_BASE64 != '' && env.WINDOWS_CODESIGN_PFX_PASSWORD != '' }}
+        shell: pwsh
+        run: |
+          if (Test-Path $env:WINDOWS_CODESIGN_CERT_PATH) {
+            Remove-Item $env:WINDOWS_CODESIGN_CERT_PATH -Force
           }

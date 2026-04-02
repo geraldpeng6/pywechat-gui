@@ -77,6 +77,21 @@ GitHub Release 自动发布：
 - `autowechat-setup-1.0.0.exe`
 - `autowechat-windows-1.0.0.zip`
 
+Windows 代码签名：
+- workflow 已支持自动签名 `autowechat.exe`、打包目录内的 `.dll/.pyd`，以及最终安装包 `exe`
+- 需要在 GitHub 仓库里配置以下 Secrets：
+- `WINDOWS_CODESIGN_PFX_BASE64`
+- `WINDOWS_CODESIGN_PFX_PASSWORD`
+- 可选仓库变量：
+- `WINDOWS_CODESIGN_TIMESTAMP_URL`
+- 若未配置证书，构建仍会成功，但产物保持未签名状态
+- 自签名证书基本不能解决 360 / SmartScreen 风险提示，正式对外分发建议使用 OV 或 EV 代码签名证书
+
+本地把 `.pfx` 转成 Base64 的一个示例：
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\codesign.pfx")) | Set-Clipboard
+```
+
 下载步骤：
 1. 打开仓库的 `Actions` 页面
 2. 点击最近一次成功的 `Build Windows Package`
