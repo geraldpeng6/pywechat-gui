@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Callable
 
 from .adapter import PyWeixinAdapter
@@ -104,7 +104,7 @@ class BatchExecutor:
             record.status = "completed"
         if record.status == "running":
             record.status = "completed"
-        record.finished_at = datetime.utcnow().isoformat(timespec="seconds")
+        record.finished_at = datetime.now(UTC).isoformat(timespec="seconds")
         return record
 
 

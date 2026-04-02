@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -183,7 +183,7 @@ class ExecutionRecord:
     def new(cls, task_type: TaskType, row_count: int, source_execution_id: int | None = None) -> "ExecutionRecord":
         return cls(
             task_type=task_type,
-            started_at=datetime.utcnow().isoformat(timespec="seconds"),
+            started_at=datetime.now(UTC).isoformat(timespec="seconds"),
             finished_at=None,
             status="running",
             row_count=row_count,

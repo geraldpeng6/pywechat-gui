@@ -46,7 +46,7 @@ def main() -> int:
     adapter = PyWeixinAdapter()
 
     app = QApplication(sys.argv)
-    icon_path = Path(__file__).resolve().parent / "assets" / "pywechat-gui.ico"
+    icon_path = Path(__file__).resolve().parent / "assets" / "autowechat.ico"
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
     app.setStyleSheet(LIGHT_STYLESHEET)

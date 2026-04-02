@@ -51,7 +51,7 @@ class RelayServiceTestCase(unittest.TestCase):
         self.service = RelayService(FakeAdapter())
         self.options = RuntimeOptions()
         self.tempdir = TemporaryDirectory()
-        self.env_patch = patch.dict(os.environ, {"PYWEIXIN_GUI_HOME": self.tempdir.name})
+        self.env_patch = patch.dict(os.environ, {"AUTOWECHAT_HOME": self.tempdir.name})
         self.env_patch.start()
 
     def tearDown(self) -> None:
