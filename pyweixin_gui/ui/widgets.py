@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QHeaderView,
     QSpinBox,
+    QTabWidget,
     QLayout,
     QSizePolicy,
     QTableWidget,
@@ -32,7 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..import_export import dump_route_rows, dump_rows, dump_table, load_route_rows, load_rows, load_session_names
-from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectTextRequest, RelayItemType, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelayValidationRequest, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row
+from ..models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, FileBatchRow, GroupSummaryRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectTextRequest, RelayItemType, RelayPackageExportRequest, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelayValidationRequest, ResourceExportKind, ResourceExportRequest, SessionScanRequest, SessionSummaryRow, TaskType, clone_row
 
 
 @dataclass
@@ -567,12 +569,12 @@ class DashboardPage(QWidget):
         subtitle.setWordWrap(True)
         self.hero_card.body_layout.addWidget(title)
         self.hero_card.body_layout.addWidget(subtitle)
-        self.hero_hint = QLabel("推荐顺序：先检查微信状态，再去批量页面导入表格，最后校验并执行。")
+        self.hero_hint = QLabel("推荐顺序：先检查微信状态，再去发送工作台整理内容和收件人，最后校验并执行。")
         self.hero_hint.setProperty("role", "good")
         self.hero_hint.setWordWrap(True)
         self.hero_card.body_layout.addWidget(self.hero_hint)
-        self.open_message_button = QPushButton("去批量消息")
-        self.open_file_button = QPushButton("去批量文件")
+        self.open_message_button = QPushButton("去发送工作台")
+        self.open_file_button = QPushButton("去导出中心")
         self.open_templates_button = QPushButton("查看模板")
         self.open_file_button.setProperty("variant", "secondary")
         self.open_templates_button.setProperty("variant", "ghost")
@@ -613,7 +615,7 @@ class DashboardPage(QWidget):
         self.steps_card = CardFrame("三步开始")
         steps = QLabel(
             "1. 点击“连接微信并刷新状态”，确认环境正常。\n"
-            "2. 在批量页面导入 Excel/CSV，或直接填写表格。\n"
+            "2. 在发送工作台导入 Excel/CSV，或直接添加内容和收件人。\n"
             "3. 先点“校验”，没有高亮报错后再执行。"
         )
         steps.setProperty("role", "hint")
@@ -1424,26 +1426,65 @@ class SessionToolsPage(QWidget):
         dump_table(headers, rows, path)
 
 
+class ExportCenterPage(QWidget):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+
+        hero_card = CardFrame("导出中心", hero=True)
+        intro = QLabel("把会话导出、资源导出和会话名单整理集中到一处，减少来回切页。")
+        intro.setProperty("role", "pageSubtitle")
+        intro.setWordWrap(True)
+        hero_card.body_layout.addWidget(intro)
+        helper = QLabel("推荐顺序：先整理会话名单，再执行会话导出；需要归档本机素材时再切到资源导出。")
+        helper.setProperty("role", "hint")
+        helper.setWordWrap(True)
+        hero_card.body_layout.addWidget(helper)
+        layout.addWidget(hero_card)
+
+        self.tabs = QTabWidget()
+        self.export_page = ExportPage()
+        self.resource_page = ResourceToolsPage()
+        self.session_tools_page = SessionToolsPage()
+        self.tabs.addTab(self.export_page, "会话导出")
+        self.tabs.addTab(self.resource_page, "资源导出")
+        self.tabs.addTab(self.session_tools_page, "会话与群工具")
+        layout.addWidget(self.tabs)
+        layout.addStretch(1)
+
+    def show_chat_export_tab(self) -> None:
+        self.tabs.setCurrentWidget(self.export_page)
+
+    def show_resource_export_tab(self) -> None:
+        self.tabs.setCurrentWidget(self.resource_page)
+
+    def show_session_tools_tab(self) -> None:
+        self.tabs.setCurrentWidget(self.session_tools_page)
+
+
 class RelayWorkbenchPage(QWidget):
     collect_texts_requested = Signal(object)
     collect_files_requested = Signal(object)
-    import_export_folder_requested = Signal(str)
+    import_folder_requested = Signal(str)
+    export_package_requested = Signal(object)
     validate_routes_requested = Signal(object)
     test_send_requested = Signal(object)
     send_requested = Signal(object)
+    save_template_requested = Signal(object, object)
+    open_templates_requested = Signal(object)
 
     PACKAGE_COLUMNS = [
         ("sequence", "顺序", "int"),
         ("item_type", "类型", "text"),
-        ("content", "内容预览", "text"),
-        ("file_path", "本地路径", "text"),
-        ("collected_at", "采集时间", "text"),
+        ("content", "内容", "text"),
+        ("file_path", "文件路径", "text"),
+        ("collected_at", "时间/来源", "text"),
     ]
 
     ROUTE_COLUMNS = [
-        ("downstream_session", "下游会话", "text"),
+        ("downstream_session", "收件人会话", "text"),
         ("validation_status", "验证状态", "text"),
-        ("validation_message", "说明", "text"),
+        ("validation_message", "结果说明", "text"),
     ]
 
     def __init__(self, parent: QWidget | None = None):
@@ -1453,12 +1494,12 @@ class RelayWorkbenchPage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        source_card = CardFrame("转发工作台", hero=True)
-        intro = QLabel("先从上游采集候选内容，再人工勾选、调整顺序、验证下游，最后测试发送或正式批量发送。")
+        source_card = CardFrame("发送工作台", hero=True)
+        intro = QLabel("把这次要发的文本、文件、图片整理好，再添加收件人，先测试一遍，确认后再正式发送。")
         intro.setProperty("role", "pageSubtitle")
         intro.setWordWrap(True)
         source_card.body_layout.addWidget(intro)
-        helper = QLabel("先整理这次真正要转发的内容，再先发一遍测试消息确认无误，最后正式批量发送。")
+        helper = QLabel("如果需要从某个聊天里采集内容，请先填写来源会话；纯手动整理发送内容时，这一项可以留空。")
         helper.setProperty("role", "hint")
         helper.setWordWrap(True)
         source_card.body_layout.addWidget(helper)
@@ -1466,9 +1507,9 @@ class RelayWorkbenchPage(QWidget):
         form = QFormLayout()
         _configure_form_layout(form)
         self.source_session_input = QLineEdit()
-        self.source_session_input.setPlaceholderText("填写上游 A 的会话名称")
+        self.source_session_input.setPlaceholderText("可选，例如：客户A项目群")
         self.package_name_input = QLineEdit()
-        self.package_name_input.setPlaceholderText("可选，例如：A客户-0422转发包")
+        self.package_name_input.setPlaceholderText("可选，例如：4月客户回传")
         self.message_limit_spin = QSpinBox()
         self.message_limit_spin.setRange(1, 500)
         self.message_limit_spin.setValue(20)
@@ -1477,53 +1518,67 @@ class RelayWorkbenchPage(QWidget):
         self.file_limit_spin.setRange(1, 200)
         self.file_limit_spin.setValue(10)
         _set_compact_width(self.file_limit_spin, 120)
-        message_limit_label = QLabel("文本采集条数")
+        message_limit_label = QLabel("文字")
         message_limit_label.setProperty("role", "muted")
-        file_limit_label = QLabel("文件采集数量")
+        file_limit_label = QLabel("文件")
         file_limit_label.setProperty("role", "muted")
-        count_row = _flow_container(message_limit_label, self.message_limit_spin, file_limit_label, self.file_limit_spin, h_spacing=12)
-        form.addRow("上游会话", self.source_session_input)
-        form.addRow("转发包名称", self.package_name_input)
-        form.addRow("采集范围", count_row)
+        count_row = _flow_container(message_limit_label, self.message_limit_spin, file_limit_label, self.file_limit_spin, h_spacing=10)
+        form.addRow("来源会话", self.source_session_input)
+        form.addRow("任务名称", self.package_name_input)
+        form.addRow("采集数量", count_row)
         source_card.body_layout.addLayout(form)
 
-        self.collect_texts_button = QPushButton("采集文本")
-        self.collect_files_button = QPushButton("采集文件")
-        self.import_export_folder_button = QPushButton("从导出目录导入")
-        self.add_text_button = QPushButton("手动加文本")
-        self.add_files_button = QPushButton("选择文件/图片")
-        self.clear_package_button = QPushButton("清空转发包")
-        self.clear_package_button.setProperty("variant", "secondary")
+        self.collect_texts_button = QPushButton("采集文字")
+        self.collect_files_button = QPushButton("采集聊天文件")
+        self.import_folder_button = QPushButton("从文件夹导入")
+        self.export_package_button = QPushButton("导出发送文件夹")
+        self.export_package_button.setProperty("variant", "ghost")
+        self.save_template_button = QPushButton("保存模板")
+        self.save_template_button.setProperty("variant", "secondary")
+        self.open_templates_button = QPushButton("模板中心")
+        self.open_templates_button.setProperty("variant", "ghost")
         source_card.body_layout.addWidget(
             _flow_container(
                 self.collect_texts_button,
                 self.collect_files_button,
-                self.import_export_folder_button,
-                self.add_text_button,
-                self.add_files_button,
-                self.clear_package_button,
+                self.import_folder_button,
+                self.export_package_button,
+                self.save_template_button,
+                self.open_templates_button,
             )
         )
-        self.package_summary_label = QLabel("先整理真正要发送的内容。文件可通过按钮选择，也可以直接拖入下方表格。")
-        self.package_summary_label.setProperty("role", "muted")
-        self.package_summary_label.setWordWrap(True)
-        source_card.body_layout.addWidget(self.package_summary_label)
         layout.addWidget(source_card)
 
-        package_card = CardFrame("转发包编辑器")
-        self.keep_latest_files_button = QPushButton("只保留最新文件")
+        package_card = CardFrame("发送内容")
+        self.add_text_button = QPushButton("+文本")
+        self.add_files_button = QPushButton("+文件/图片")
+        self.clear_package_button = QPushButton("清空内容")
+        self.clear_package_button.setProperty("variant", "secondary")
+        self.keep_latest_files_button = QPushButton("同名文件仅保留最新")
         self.keep_latest_files_button.setProperty("variant", "ghost")
         self.move_up_button = QPushButton("上移")
         self.move_down_button = QPushButton("下移")
         self.remove_package_button = QPushButton("删除选中")
         self.remove_package_button.setProperty("variant", "secondary")
         package_card.body_layout.addWidget(
-            _flow_container(self.keep_latest_files_button, self.move_up_button, self.move_down_button, self.remove_package_button)
+            _flow_container(
+                self.add_text_button,
+                self.add_files_button,
+                self.keep_latest_files_button,
+                self.move_up_button,
+                self.move_down_button,
+                self.remove_package_button,
+                self.clear_package_button,
+            )
         )
-        tip = QLabel("每一行就是一条要发送的内容。不要发的内容直接删除，需要调整顺序时可用上移和下移。")
+        tip = QLabel("每一行就是一条要发出的内容。不要发的内容直接删掉；拖入文件也可以直接加入。")
         tip.setProperty("role", "hint")
         tip.setWordWrap(True)
         package_card.body_layout.addWidget(tip)
+        self.package_summary_label = QLabel("还没有发送内容。可以手动添加，也可以从聊天或文件夹导入。")
+        self.package_summary_label.setProperty("role", "muted")
+        self.package_summary_label.setWordWrap(True)
+        package_card.body_layout.addWidget(self.package_summary_label)
         self.package_table = RelayPackageTableWidget()
         self.package_table.setColumnCount(len(self.PACKAGE_COLUMNS))
         self.package_table.setHorizontalHeaderLabels([title for _, title, _ in self.PACKAGE_COLUMNS])
@@ -1534,21 +1589,21 @@ class RelayWorkbenchPage(QWidget):
         package_card.body_layout.addWidget(self.package_table)
         layout.addWidget(package_card)
 
-        route_card = CardFrame("下游会话")
-        self.import_routes_button = QPushButton("导入下游名单")
-        self.export_route_template_button = QPushButton("导出下游模板")
+        route_card = CardFrame("发送给谁")
+        self.import_routes_button = QPushButton("导入收件人表格")
+        self.export_route_template_button = QPushButton("导出收件人模板")
         self.export_route_template_button.setProperty("variant", "ghost")
-        self.add_route_button = QPushButton("新增一行")
+        self.add_route_button = QPushButton("+收件人")
         self.remove_route_button = QPushButton("删除选中")
         self.remove_route_button.setProperty("variant", "secondary")
         route_card.body_layout.addWidget(
             _flow_container(self.import_routes_button, self.export_route_template_button, self.add_route_button, self.remove_route_button)
         )
-        route_tip = QLabel("下游名单支持 Excel/CSV 导入。每行写一个下游会话，也支持在“下游会话列表”列里用 | 一次写多个下游。")
+        route_tip = QLabel("支持 Excel/CSV 导入。每行一个收件人，也支持一次粘贴多行名单。")
         route_tip.setProperty("role", "hint")
         route_tip.setWordWrap(True)
         route_card.body_layout.addWidget(route_tip)
-        self.route_summary_label = QLabel("还没有填写下游会话。")
+        self.route_summary_label = QLabel("还没有收件人。")
         self.route_summary_label.setProperty("role", "muted")
         self.route_summary_label.setWordWrap(True)
         route_card.body_layout.addWidget(self.route_summary_label)
@@ -1559,25 +1614,26 @@ class RelayWorkbenchPage(QWidget):
         self.route_table.horizontalHeader().setStretchLastSection(True)
         self.route_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         route_card.body_layout.addWidget(self.route_table)
-        self.validate_routes_button = QPushButton("验证下游会话")
-        self.test_send_button = QPushButton("测试发送到文件传输助手")
+        self.validate_routes_button = QPushButton("验证收件人")
+        self.test_send_button = QPushButton("先发到文件传输助手")
         self.test_send_button.setProperty("variant", "secondary")
-        self.send_button = QPushButton("正式批量发送")
-        route_card.body_layout.addWidget(
-            _flow_container(self.validate_routes_button, self.test_send_button, self.send_button)
-        )
+        self.send_button = QPushButton("开始批量发送")
+        route_card.body_layout.addWidget(_flow_container(self.validate_routes_button, self.test_send_button, self.send_button))
         self.result_text = QTextEdit()
         self.result_text.setReadOnly(True)
         self.result_text.setMinimumHeight(96)
         self.result_text.setMaximumHeight(140)
-        self.result_text.setPlaceholderText("验证结果、测试发送结果和正式发送结果会显示在这里。")
+        self.result_text.setPlaceholderText("这里会显示收件人验证、测试发送和正式发送的结果。")
         route_card.body_layout.addWidget(self.result_text)
         layout.addWidget(route_card)
         layout.addStretch(1)
 
         self.collect_texts_button.clicked.connect(self._request_collect_texts)
         self.collect_files_button.clicked.connect(self._request_collect_files)
-        self.import_export_folder_button.clicked.connect(self._request_import_export_folder)
+        self.import_folder_button.clicked.connect(self._request_import_folder)
+        self.export_package_button.clicked.connect(self._request_export_package)
+        self.save_template_button.clicked.connect(self._request_save_template)
+        self.open_templates_button.clicked.connect(lambda: self.open_templates_requested.emit(TaskType.RELAY_SEND))
         self.add_text_button.clicked.connect(self._add_manual_text)
         self.add_files_button.clicked.connect(self._add_local_files)
         self.clear_package_button.clicked.connect(self.clear_package_rows)
@@ -1589,26 +1645,25 @@ class RelayWorkbenchPage(QWidget):
         self.package_table.itemChanged.connect(lambda _item: self.refresh_package_summary())
         self.import_routes_button.clicked.connect(self.import_route_rows)
         self.export_route_template_button.clicked.connect(self.export_route_template)
-        self.add_route_button.clicked.connect(self.add_empty_route_row)
+        self.add_route_button.clicked.connect(self._add_route_rows_from_input)
         self.remove_route_button.clicked.connect(self.remove_selected_route_rows)
         self.route_table.itemChanged.connect(lambda _item: self.refresh_route_summary())
         self.validate_routes_button.clicked.connect(self._request_validate_routes)
         self.test_send_button.clicked.connect(self._request_test_send)
         self.send_button.clicked.connect(self._request_send)
-        self.source_session_input.textChanged.connect(self.refresh_route_summary)
 
         self._configure_package_columns()
         self._configure_route_columns()
         self.set_running_state(False)
 
     def _configure_package_columns(self) -> None:
-        widths = {"sequence": 70, "item_type": 90, "content": 320, "file_path": 360, "collected_at": 150}
+        widths = {"sequence": 70, "item_type": 90, "content": 340, "file_path": 360, "collected_at": 150}
         for index, (key, _, _) in enumerate(self.PACKAGE_COLUMNS):
             if key in widths:
                 self.package_table.setColumnWidth(index, widths[key])
 
     def _configure_route_columns(self) -> None:
-        widths = {"downstream_session": 220, "validation_status": 100, "validation_message": 320}
+        widths = {"downstream_session": 240, "validation_status": 110, "validation_message": 320}
         for index, (key, _, _) in enumerate(self.ROUTE_COLUMNS):
             if key in widths:
                 self.route_table.setColumnWidth(index, widths[key])
@@ -1620,7 +1675,7 @@ class RelayWorkbenchPage(QWidget):
         )
         errors = request.validate()
         if errors:
-            QMessageBox.warning(self, "采集文本", next(iter(errors.values())))
+            QMessageBox.warning(self, "采集文字", next(iter(errors.values())))
             return
         self.collect_texts_requested.emit(request)
 
@@ -1631,12 +1686,45 @@ class RelayWorkbenchPage(QWidget):
         )
         errors = request.validate()
         if errors:
-            QMessageBox.warning(self, "采集文件", next(iter(errors.values())))
+            QMessageBox.warning(self, "采集聊天文件", next(iter(errors.values())))
             return
         self.collect_files_requested.emit(request)
 
+    def _request_save_template(self) -> None:
+        if not self.package_rows():
+            QMessageBox.information(self, "保存模板", "请先准备至少一条发送内容。")
+            return
+        self.save_template_requested.emit(TaskType.RELAY_SEND, self.template_payload())
+
+    def template_payload(self) -> dict[str, Any]:
+        return {
+            "source_session": self.source_session_input.text().strip(),
+            "package_name": self.package_name_input.text().strip(),
+            "package_rows": self.package_rows(),
+            "route_rows": self.route_rows(),
+        }
+
+    def load_template_payload(self, payload: dict[str, Any]) -> None:
+        self.source_session_input.setText(str(payload.get("source_session", "") or "").strip())
+        self.package_name_input.setText(str(payload.get("package_name", "") or "").strip())
+        package_rows = [
+            RelayPackageRow.from_mapping(item.__dict__ if isinstance(item, RelayPackageRow) else item)
+            for item in payload.get("package_rows", [])
+            if isinstance(item, (RelayPackageRow, dict))
+        ]
+        route_rows = [
+            RelayRouteRow.from_mapping(item.__dict__ if isinstance(item, RelayRouteRow) else item)
+            for item in payload.get("route_rows", [])
+            if isinstance(item, (RelayRouteRow, dict))
+        ]
+        self.replace_package_rows(package_rows)
+        self.set_route_rows(route_rows)
+        self.result_text.clear()
+        self.refresh_package_summary(f"已加载 {len(package_rows)} 条发送内容。")
+        self.refresh_route_summary()
+
     def _add_manual_text(self) -> None:
-        text, ok = QInputDialog.getMultiLineText(self, "手动添加文本", "要加入转发包的文本内容")
+        text, ok = QInputDialog.getMultiLineText(self, "添加文本", "输入要加入本次发送的文本内容")
         if not ok or not text.strip():
             return
         row = RelayPackageRow(
@@ -1646,19 +1734,19 @@ class RelayWorkbenchPage(QWidget):
             content=text.strip(),
             collected_at="手动添加",
         )
-        self.append_package_rows([row], "已手动加入 1 条文本。")
+        self.append_package_rows([row], "已加入 1 条文本。")
 
     def _add_local_files(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, "选择本地文件或图片")
+        paths, _ = QFileDialog.getOpenFileNames(self, "选择要发送的文件或图片")
         if not paths:
             return
-        self._append_local_files(paths, f"已加入 {len(paths)} 个本地文件/图片。")
+        self._append_local_files(paths, f"已加入 {len(paths)} 个文件/图片。")
 
     def _handle_dropped_files(self, paths: list[str]) -> None:
         valid_paths = [path for path in paths if Path(path).is_file()]
         if not valid_paths:
             return
-        self._append_local_files(valid_paths, f"已拖入 {len(valid_paths)} 个本地文件/图片。")
+        self._append_local_files(valid_paths, f"已拖入 {len(valid_paths)} 个文件/图片。")
 
     def _append_local_files(self, paths: list[str], summary: str) -> None:
         rows = []
@@ -1671,31 +1759,60 @@ class RelayWorkbenchPage(QWidget):
                     source_session=self.source_session_input.text().strip(),
                     content=Path(path).name,
                     file_path=path,
-                    collected_at="本地补充",
+                    collected_at="本地加入",
                 )
             )
         self.append_package_rows(rows, summary)
 
-    def _request_import_export_folder(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "选择会话导出目录")
+    def _request_import_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "选择导入文件夹")
         if not path:
             return
-        self.import_export_folder_requested.emit(path)
+        self.import_folder_requested.emit(path)
+
+    def _request_export_package(self) -> None:
+        target_folder = QFileDialog.getExistingDirectory(self, "选择发送文件夹导出位置")
+        if not target_folder:
+            return
+        request = RelayPackageExportRequest(
+            source_session=self.source_session_input.text().strip(),
+            package_name=self.package_name_input.text().strip(),
+            target_folder=target_folder,
+            package_rows=self.package_rows(),
+        )
+        errors = request.validate()
+        if errors:
+            QMessageBox.warning(self, "导出发送文件夹", next(iter(errors.values())))
+            return
+        self.export_package_requested.emit(request)
 
     def append_package_rows(self, rows: list[RelayPackageRow], summary: str = "") -> None:
         start = self.package_table.rowCount()
         for offset, row in enumerate(rows):
             self.package_table.insertRow(start + offset)
-            self._set_table_row(self.package_table, start + offset, self.PACKAGE_COLUMNS, row.__dict__ | {"item_type": row.item_type.value})
+            self._set_table_row(
+                self.package_table,
+                start + offset,
+                self.PACKAGE_COLUMNS,
+                row.__dict__ | {"item_type": row.item_type.value},
+            )
         self._renumber_package_rows()
         if summary:
             self.package_summary_label.setText(summary)
 
+    def replace_package_rows(self, rows: list[RelayPackageRow], summary: str = "") -> None:
+        self.package_table.setRowCount(0)
+        self.append_package_rows(rows, summary)
+
     def set_route_rows(self, rows: list[RelayRouteRow], summary: str | None = None) -> None:
         self.route_table.setRowCount(0)
-        for row_index, row in enumerate(rows):
-            self.route_table.insertRow(row_index)
-            self._set_table_row(self.route_table, row_index, self.ROUTE_COLUMNS, row.__dict__)
+        self.append_route_rows(rows, summary)
+
+    def append_route_rows(self, rows: list[RelayRouteRow], summary: str | None = None) -> None:
+        start = self.route_table.rowCount()
+        for offset, row in enumerate(rows):
+            self.route_table.insertRow(start + offset)
+            self._set_table_row(self.route_table, start + offset, self.ROUTE_COLUMNS, row.__dict__)
         self.refresh_route_summary(summary)
 
     def route_rows(self) -> list[RelayRouteRow]:
@@ -1711,11 +1828,13 @@ class RelayWorkbenchPage(QWidget):
         rows: list[RelayPackageRow] = []
         for row_index in range(self.package_table.rowCount()):
             mapping = self._row_mapping(self.package_table, row_index, self.PACKAGE_COLUMNS)
-            rows.append(RelayPackageRow.from_mapping(mapping))
+            row = RelayPackageRow.from_mapping(mapping)
+            if row.item_type is RelayItemType.TEXT and not row.content.strip():
+                continue
+            if row.item_type in {RelayItemType.FILE, RelayItemType.IMAGE} and not row.file_path.strip():
+                continue
+            rows.append(row)
         return rows
-
-    def selected_package_rows(self) -> list[RelayPackageRow]:
-        return self.package_rows()
 
     def current_validation_request(self) -> RelayValidationRequest:
         return RelayValidationRequest(
@@ -1735,7 +1854,7 @@ class RelayWorkbenchPage(QWidget):
         request = self.current_validation_request()
         errors = request.validate()
         if errors:
-            QMessageBox.warning(self, "验证下游", next(iter(errors.values())))
+            QMessageBox.warning(self, "验证收件人", next(iter(errors.values())))
             return
         self.validate_routes_requested.emit(request)
 
@@ -1751,37 +1870,46 @@ class RelayWorkbenchPage(QWidget):
         request = self.current_send_request(test_only=False)
         errors = request.validate()
         if errors:
-            QMessageBox.warning(self, "正式发送", next(iter(errors.values())))
+            QMessageBox.warning(self, "开始批量发送", next(iter(errors.values())))
             return
         self.send_requested.emit(request)
 
     def import_route_rows(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "导入下游名单", "", "Excel/CSV (*.xlsx *.csv)")
+        path, _ = QFileDialog.getOpenFileName(self, "导入收件人表格", "", "Excel/CSV (*.xlsx *.csv)")
         if not path:
             return
         rows = load_route_rows(path)
-        self.set_route_rows(rows, f"已导入 {len(rows)} 个下游会话。")
+        self.set_route_rows(rows, f"已导入 {len(rows)} 个收件人。")
 
     def export_route_template(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "导出下游模板", "relay-targets-template.xlsx", "Excel (*.xlsx);;CSV (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(self, "导出收件人模板", "收件人模板.xlsx", "Excel (*.xlsx);;CSV (*.csv)")
         if not path:
             return
         dump_route_rows([], path)
 
-    def add_empty_route_row(self) -> None:
-        row_index = self.route_table.rowCount()
-        self.route_table.insertRow(row_index)
-        self._set_table_row(
-            self.route_table,
-            row_index,
-            self.ROUTE_COLUMNS,
-            {
-                "downstream_session": "",
-                "validation_status": "未验证",
-                "validation_message": "",
-            },
-        )
-        self.refresh_route_summary()
+    def _add_route_rows_from_input(self) -> None:
+        text, ok = QInputDialog.getMultiLineText(self, "添加收件人", "输入一个或多个收件人会话名称，可按行填写")
+        if not ok or not text.strip():
+            return
+        targets = self._parse_route_inputs(text)
+        if not targets:
+            return
+        existing = {row.downstream_session for row in self.route_rows()}
+        rows: list[RelayRouteRow] = []
+        skipped = 0
+        for target in targets:
+            if target in existing:
+                skipped += 1
+                continue
+            rows.append(RelayRouteRow(downstream_session=target))
+            existing.add(target)
+        if not rows:
+            QMessageBox.information(self, "添加收件人", "输入的收件人都已经在列表里了。")
+            return
+        summary = f"已加入 {len(rows)} 个收件人。"
+        if skipped:
+            summary += f" 已自动跳过 {skipped} 个重复项。"
+        self.append_route_rows(rows, summary)
 
     def remove_selected_package_rows(self) -> None:
         self._remove_selected_rows(self.package_table)
@@ -1802,11 +1930,7 @@ class RelayWorkbenchPage(QWidget):
 
     def clear_package_rows(self) -> None:
         self.package_table.setRowCount(0)
-        self.refresh_package_summary("转发包已清空。")
-
-    def replace_package_rows(self, rows: list[RelayPackageRow], summary: str = "") -> None:
-        self.package_table.setRowCount(0)
-        self.append_package_rows(rows, summary)
+        self.refresh_package_summary("发送内容已清空。")
 
     def keep_latest_file_rows(self) -> None:
         try:
@@ -1815,11 +1939,11 @@ class RelayWorkbenchPage(QWidget):
             return
         rows = self.package_rows()
         if not rows:
-            QMessageBox.information(self, "转发包编辑器", "当前没有可处理的文件项。")
+            QMessageBox.information(self, "发送内容", "当前没有可处理的文件项。")
             return
         updated_rows = RelayService.keep_latest_file_rows(rows)
         removed_count = max(0, len(rows) - len(updated_rows))
-        self.replace_package_rows(updated_rows, f"已移除 {removed_count} 个同名旧文件，只保留最新版本。")
+        self.replace_package_rows(updated_rows, f"已移除 {removed_count} 个同名旧文件，只保留较新的版本。")
 
     def apply_validation_result(self, rows: list[RelayRouteRow], summary: str) -> None:
         self.set_route_rows(rows, summary)
@@ -1833,7 +1957,20 @@ class RelayWorkbenchPage(QWidget):
             self.package_summary_label.setText(override)
             return
         rows = self.package_rows()
-        self.package_summary_label.setText(f"当前转发包共有 {len(rows)} 条内容。")
+        if not rows:
+            self.package_summary_label.setText("还没有发送内容。可以手动添加，也可以从聊天或文件夹导入。")
+            return
+        text_count = sum(1 for row in rows if row.item_type is RelayItemType.TEXT)
+        file_count = sum(1 for row in rows if row.item_type is RelayItemType.FILE)
+        image_count = sum(1 for row in rows if row.item_type is RelayItemType.IMAGE)
+        parts = [f"当前已准备 {len(rows)} 条内容"]
+        if text_count:
+            parts.append(f"文本 {text_count} 条")
+        if file_count:
+            parts.append(f"文件 {file_count} 个")
+        if image_count:
+            parts.append(f"图片 {image_count} 张")
+        self.package_summary_label.setText("，".join(parts) + "。")
 
     def refresh_route_summary(self, override: str | None = None) -> None:
         if override:
@@ -1841,9 +1978,19 @@ class RelayWorkbenchPage(QWidget):
             return
         rows = self.route_rows()
         if not rows:
-            self.route_summary_label.setText("还没有填写下游会话。")
+            self.route_summary_label.setText("还没有收件人。")
             return
-        self.route_summary_label.setText(f"当前已填写 {len(rows)} 个下游会话。")
+        found_count = sum(1 for row in rows if row.validation_status == "已找到")
+        missing_count = sum(1 for row in rows if row.validation_status == "未找到")
+        pending_count = len(rows) - found_count - missing_count
+        parts = [f"当前有 {len(rows)} 个收件人"]
+        if found_count:
+            parts.append(f"已验证可用 {found_count} 个")
+        if missing_count:
+            parts.append(f"未找到 {missing_count} 个")
+        if pending_count:
+            parts.append(f"待验证 {pending_count} 个")
+        self.route_summary_label.setText("，".join(parts) + "。")
 
     def set_running_state(self, is_running: bool) -> None:
         self._running = is_running
@@ -1854,7 +2001,10 @@ class RelayWorkbenchPage(QWidget):
             self.file_limit_spin,
             self.collect_texts_button,
             self.collect_files_button,
-            self.import_export_folder_button,
+            self.import_folder_button,
+            self.export_package_button,
+            self.save_template_button,
+            self.open_templates_button,
             self.add_text_button,
             self.add_files_button,
             self.clear_package_button,
@@ -1934,6 +2084,14 @@ class RelayWorkbenchPage(QWidget):
             self._set_table_row(table, new_index, columns, current)
             table.selectRow(new_index)
 
+    @staticmethod
+    def _parse_route_inputs(text: str) -> list[str]:
+        normalized = text.replace("\r\n", "\n").replace("，", "|").replace(",", "|")
+        parts: list[str] = []
+        for line in normalized.splitlines():
+            parts.extend(piece.strip() for piece in line.split("|") if piece.strip())
+        return parts
+
 
 class TemplatesPage(QWidget):
     load_template_requested = Signal(object, object)
@@ -1969,20 +2127,20 @@ class TemplatesPage(QWidget):
         helper.setWordWrap(True)
         card.body_layout.addWidget(helper)
         self.total_templates_label = self._create_stat_card("模板总数", "0")
-        self.message_templates_label = self._create_stat_card("消息模板", "0")
-        self.file_templates_label = self._create_stat_card("文件模板", "0")
+        self.send_templates_label = self._create_stat_card("发送模板", "0")
+        self.legacy_templates_label = self._create_stat_card("旧版模板", "0")
         card.body_layout.addWidget(
-            _flow_container(self.total_templates_label, self.message_templates_label, self.file_templates_label, h_spacing=12, v_spacing=12)
+            _flow_container(self.total_templates_label, self.send_templates_label, self.legacy_templates_label, h_spacing=12, v_spacing=12)
         )
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("搜索模板名称或类型，例如：消息、客户、通知")
+        self.search_input.setPlaceholderText("搜索模板名称或类型，例如：发送、客户、通知")
         card.body_layout.addWidget(self.search_input)
-        self.summary_label = QLabel("还没有模板。你可以先去批量页面整理一份任务，再点“保存模板”。")
+        self.summary_label = QLabel("还没有模板。你可以先去发送工作台整理一份任务，再点“保存模板”。")
         self.summary_label.setProperty("role", "muted")
         self.summary_label.setWordWrap(True)
         card.body_layout.addWidget(self.summary_label)
-        self.create_message_button = QPushButton("新建消息任务")
-        self.create_file_button = QPushButton("新建文件任务")
+        self.create_message_button = QPushButton("新建发送任务")
+        self.create_file_button = QPushButton("打开发送工作台")
         self.create_file_button.setProperty("variant", "secondary")
         card.body_layout.addWidget(_flow_container(self.create_message_button, self.create_file_button))
         self.create_message_button.clicked.connect(lambda: self.create_message_requested.emit())
@@ -2068,6 +2226,37 @@ class ExportHistoryPage(QWidget):
         self.retry_failed_button.setEnabled(False)
 
 
+class RecordsCenterPage(QWidget):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+
+        hero_card = CardFrame("记录中心", hero=True)
+        intro = QLabel("把执行结果和导出结果集中放在一起，方便回看、复查和重新打开。")
+        intro.setProperty("role", "pageSubtitle")
+        intro.setWordWrap(True)
+        hero_card.body_layout.addWidget(intro)
+        helper = QLabel("建议先看执行记录中的失败项，再看导出记录里的落地文件夹。")
+        helper.setProperty("role", "hint")
+        helper.setWordWrap(True)
+        hero_card.body_layout.addWidget(helper)
+        layout.addWidget(hero_card)
+
+        self.tabs = QTabWidget()
+        self.history_page = HistoryPage()
+        self.export_history_page = ExportHistoryPage()
+        self.tabs.addTab(self.history_page, "执行记录")
+        self.tabs.addTab(self.export_history_page, "导出记录")
+        layout.addWidget(self.tabs)
+        layout.addStretch(1)
+
+    def show_execution_tab(self) -> None:
+        self.tabs.setCurrentWidget(self.history_page)
+
+    def show_export_tab(self) -> None:
+        self.tabs.setCurrentWidget(self.export_history_page)
+
+
 class HistoryPage(QWidget):
     retry_failed_requested = Signal(object, object, object)
     clear_history_requested = Signal()
@@ -2088,7 +2277,7 @@ class HistoryPage(QWidget):
         history_card.body_layout.addWidget(
             _flow_container(self.refresh_button, self.retry_button, self.export_failed_button, self.clear_button, self.failed_only_checkbox)
         )
-        helper = QLabel("先看成功/失败数量，再点开失败项。失败项可以一键回填到批量页面重新执行。")
+        helper = QLabel("先看成功/失败数量，再点开失败项。较早版本的批量任务失败项仍可回填；新任务建议回到发送工作台继续处理。")
         helper.setProperty("role", "hint")
         helper.setWordWrap(True)
         history_card.body_layout.addWidget(helper)
@@ -2109,8 +2298,8 @@ class HistoryPage(QWidget):
         self.failure_summary_label.setProperty("role", "hint")
         self.failure_summary_label.setWordWrap(True)
         history_card.body_layout.addWidget(self.failure_summary_label)
-        self.open_message_button = QPushButton("去批量消息")
-        self.open_file_button = QPushButton("去批量文件")
+        self.open_message_button = QPushButton("去发送工作台")
+        self.open_file_button = QPushButton("去导出中心")
         self.open_file_button.setProperty("variant", "secondary")
         history_card.body_layout.addWidget(_flow_container(self.open_message_button, self.open_file_button))
         self.open_message_button.clicked.connect(lambda: self.open_message_requested.emit())
@@ -2128,8 +2317,8 @@ class HistoryPage(QWidget):
 
         detail_group = QGroupBox("逐行结果")
         detail_layout = QVBoxLayout(detail_group)
-        self.detail_table = QTableWidget(0, 5)
-        self.detail_table.setHorizontalHeaderLabels(["行号", "会话", "结果", "错误码", "错误信息"])
+        self.detail_table = QTableWidget(0, 6)
+        self.detail_table.setHorizontalHeaderLabels(["行号", "会话", "结果", "内容摘要", "错误码", "错误信息"])
         _configure_data_table(self.detail_table, minimum_height=220)
         self.detail_table.verticalHeader().setVisible(False)
         self.detail_table.horizontalHeader().setStretchLastSection(True)
@@ -2192,10 +2381,12 @@ class SettingsPage(QWidget):
         self.window_height.setRange(720, 2160)
         _set_compact_width(self.window_height, 120)
         self.import_encoding = QComboBox()
-        self.import_encoding.addItems(["auto", "utf-8-sig", "gbk"])
+        self.import_encoding.addItem("自动识别", "auto")
+        self.import_encoding.addItem("UTF-8（推荐）", "utf-8-sig")
+        self.import_encoding.addItem("GBK", "gbk")
         _set_compact_width(self.import_encoding, 150)
         self.theme = QComboBox()
-        self.theme.addItems(["light"])
+        self.theme.addItem("浅色", "light")
         _set_compact_width(self.theme, 150)
 
         behavior_row = _flow_container(self.is_maximize, self.close_weixin, self.clear, h_spacing=16)

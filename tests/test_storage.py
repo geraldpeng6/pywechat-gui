@@ -42,6 +42,27 @@ class StorageTestCase(unittest.TestCase):
         self.assertEqual(len(loaded.rows), 1)
         self.assertEqual(loaded.rows[0].session_name, "好友A")
 
+    def test_relay_execution_roundtrip(self):
+        record = ExecutionRecord.new(TaskType.RELAY_SEND, row_count=1)
+        record.status = "completed"
+        record.finished_at = "2026-04-02T10:00:00"
+        record.failure_count = 1
+        record.rows.append(
+            ExecutionRowResult(
+                row_index=0,
+                session_name="下游A",
+                success=False,
+                error_code="RELAY_SEND_FAILED",
+                error_message="发送失败",
+                row_payload_json='{"target_session":"下游A","item_count":3}',
+            )
+        )
+        saved = self.storage.save_execution(record)
+        loaded = self.storage.get_execution(saved.id)
+        self.assertEqual(loaded.task_type, TaskType.RELAY_SEND)
+        self.assertEqual(loaded.failure_count, 1)
+        self.assertEqual(loaded.rows[0].payload["target_session"], "下游A")
+
 
 if __name__ == "__main__":
     unittest.main()

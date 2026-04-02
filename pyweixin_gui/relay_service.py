@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime
 import json
 from pathlib import Path
 import re
+import shutil
 from typing import Callable
 
 from .adapter import PyWeixinAdapter
+from .import_export import dump_table, load_table_rows
 from .models import (
     RelayCollectFilesRequest,
     RelayCollectionResult,
     RelayCollectTextRequest,
     RelayItemType,
+    RelayPackageExportRequest,
+    RelayPackageExportResult,
     RelayPackageRow,
     RelayRouteRow,
     RelaySendRequest,
@@ -28,6 +33,14 @@ ProgressCallback = Callable[[str], None]
 StopCallback = Callable[[], bool]
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff"}
+MEDIA_PLACEHOLDER_LABELS = {
+    "图片": "图片",
+    "[图片]": "图片",
+    "视频": "视频",
+    "[视频]": "视频",
+    "动画表情": "动画表情",
+    "[动画表情]": "动画表情",
+}
 
 
 class RelayService:
@@ -44,21 +57,29 @@ class RelayService:
         if errors:
             raise ValueError(next(iter(errors.values())))
         if on_progress:
-            on_progress("正在采集上游文本消息...")
+            on_progress("正在采集来源会话里的文字消息...")
         messages, timestamps = self.adapter.dump_chat_history(
             session_name=request.source_session,
             number=request.message_limit,
             options=runtime_options,
         )
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        text_entries = [
-            (
-                str(message).strip(),
-                timestamps[index] if index < len(timestamps) and timestamps[index] else now,
+        skipped_media: Counter[str] = Counter()
+        text_entries = []
+        for index, message in enumerate(messages):
+            message_text = str(message or "").strip()
+            if not message_text:
+                continue
+            placeholder_label = self._placeholder_media_label(message_text)
+            if placeholder_label:
+                skipped_media[placeholder_label] += 1
+                continue
+            text_entries.append(
+                (
+                    message_text,
+                    timestamps[index] if index < len(timestamps) and timestamps[index] else now,
+                )
             )
-            for index, message in enumerate(messages)
-            if str(message or "").strip()
-        ]
         # pyweixin 返回的聊天记录顺序是“从晚到早”，这里反转成普通聊天阅读顺序。
         text_entries.reverse()
         rows = [
@@ -72,6 +93,10 @@ class RelayService:
             for index, (message, timestamp) in enumerate(text_entries, start=1)
         ]
         warning = "" if rows else "当前没有采集到可转发的文本消息。"
+        if skipped_media:
+            media_summary = "、".join(f"{label}{count}条" for label, count in skipped_media.items())
+            extra = f"已自动跳过 {media_summary}。如需补入图片，请先把图片保存到本机，再用“选择文件/图片”或“从文件夹导入”。"
+            warning = f"{warning} {extra}".strip()
         return RelayCollectionResult(source_session=request.source_session, rows=rows, warning=warning)
 
     def collect_file_rows(
@@ -140,7 +165,7 @@ class RelayService:
                 continue
             checked_count += 1
             if on_progress:
-                on_progress(f"正在验证下游会话：{row.downstream_session}")
+                on_progress(f"正在验证收件人：{row.downstream_session}")
             try:
                 self.adapter.validate_session(row.downstream_session, runtime_options)
                 new_row.validation_status = "已找到"
@@ -160,11 +185,74 @@ class RelayService:
             missing_count=missing_count,
         )
 
-    def load_export_folder_rows(self, folder_path: str | Path) -> RelayCollectionResult:
+    def load_folder_rows(self, folder_path: str | Path) -> RelayCollectionResult:
         folder = Path(folder_path).expanduser().resolve()
         if not folder.is_dir():
-            raise ValueError("所选导出目录不存在。")
-        source_session = folder.name
+            raise ValueError("所选文件夹不存在。")
+        relay_manifest_xlsx = folder / "发送清单.xlsx"
+        if not relay_manifest_xlsx.exists():
+            relay_manifest_xlsx = folder / "转发清单.xlsx"
+        if relay_manifest_xlsx.exists():
+            return self._load_relay_package_rows(folder, relay_manifest_xlsx)
+        relay_manifest = folder / "relay-package.json"
+        if relay_manifest.exists():
+            return self._load_relay_package_rows(folder, relay_manifest)
+        return self._load_export_folder_rows(folder)
+
+    def load_export_folder_rows(self, folder_path: str | Path) -> RelayCollectionResult:
+        return self.load_folder_rows(folder_path)
+
+    def export_package_folder(self, request: RelayPackageExportRequest) -> RelayPackageExportResult:
+        errors = request.validate()
+        if errors:
+            raise ValueError(next(iter(errors.values())))
+        target_root = Path(request.target_folder).expanduser().resolve()
+        target_root.mkdir(parents=True, exist_ok=True)
+        package_name = request.package_name.strip() or request.source_session.strip() or "发送任务"
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        package_folder = target_root / f"{self._sanitize_name(package_name)}-{timestamp}"
+        package_folder.mkdir(parents=True, exist_ok=True)
+        files_folder = package_folder / "素材文件"
+        files_folder.mkdir(parents=True, exist_ok=True)
+
+        ordered_rows = list(sorted(request.package_rows, key=lambda item: item.sequence))
+        manifest_items: list[dict[str, str | int]] = []
+        message_count = 0
+        file_count = 0
+
+        for index, row in enumerate(ordered_rows, start=1):
+            item_mapping: dict[str, str | int] = {
+                "序号": index,
+                "类型": self._item_type_label(row.item_type),
+                "内容预览": row.content,
+                "采集时间": row.collected_at,
+                "相对路径": "",
+            }
+            if row.item_type is RelayItemType.TEXT:
+                message_count += 1
+            else:
+                source_path = Path(row.file_path).expanduser().resolve()
+                copied_path = self._copy_asset_to_folder(source_path, files_folder, index)
+                item_mapping["相对路径"] = str(Path("素材文件") / copied_path.name)
+                item_mapping["内容预览"] = copied_path.name
+                file_count += 1
+            manifest_items.append(item_mapping)
+
+        manifest_path = package_folder / "发送清单.xlsx"
+        dump_table(["序号", "类型", "内容预览", "采集时间", "相对路径"], manifest_items, manifest_path)
+        return RelayPackageExportResult(
+            source_session=request.source_session,
+            package_name=package_name,
+            package_folder=str(package_folder),
+            item_count=len(ordered_rows),
+            message_count=message_count,
+            file_count=file_count,
+            manifest_path=str(manifest_path),
+            files_folder=str(files_folder),
+        )
+
+    def _load_export_folder_rows(self, folder: Path) -> RelayCollectionResult:
+        source_session = self._guess_export_session_name(folder)
         summary_json = folder / "export-summary.json"
         if summary_json.exists():
             try:
@@ -174,28 +262,49 @@ class RelayService:
                 pass
 
         rows: list[RelayPackageRow] = []
-        messages_json = folder / "messages.json"
-        if messages_json.exists():
-            payload = json.loads(messages_json.read_text(encoding="utf-8"))
-            if isinstance(payload, list):
-                message_items = [item for item in payload if isinstance(item, dict)]
-                # 现有导出文件中的 messages.json 保留的是采集原顺序，这里统一回填为“从早到晚”。
-                for item in reversed(message_items):
-                    if not isinstance(item, dict):
-                        continue
-                    message = str(item.get("message", "") or "").strip()
-                    if not message:
-                        continue
-                    rows.append(
-                        RelayPackageRow(
-                            sequence=len(rows) + 1,
-                            item_type=RelayItemType.TEXT,
-                            source_session=source_session,
-                            content=message,
-                            collected_at=str(item.get("timestamp", "") or "").strip(),
-                        )
+        message_table = folder / "聊天记录.xlsx"
+        if message_table.exists():
+            payload = load_table_rows(message_table)
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                message = str(item.get("消息内容", "") or item.get("message", "") or "").strip()
+                if not message:
+                    continue
+                rows.append(
+                    RelayPackageRow(
+                        sequence=len(rows) + 1,
+                        item_type=RelayItemType.TEXT,
+                        source_session=source_session,
+                        content=message,
+                        collected_at=str(item.get("时间", "") or item.get("timestamp", "") or "").strip(),
                     )
-        files_folder = folder / "files"
+                )
+        else:
+            messages_json = folder / "messages.json"
+            if messages_json.exists():
+                payload = json.loads(messages_json.read_text(encoding="utf-8"))
+                if isinstance(payload, list):
+                    message_items = [item for item in payload if isinstance(item, dict)]
+                    # 现有导出文件中的 messages.json 保留的是采集原顺序，这里统一回填为“从早到晚”。
+                    for item in reversed(message_items):
+                        if not isinstance(item, dict):
+                            continue
+                        message = str(item.get("message", "") or "").strip()
+                        if not message:
+                            continue
+                        rows.append(
+                            RelayPackageRow(
+                                sequence=len(rows) + 1,
+                                item_type=RelayItemType.TEXT,
+                                source_session=source_session,
+                                content=message,
+                                collected_at=str(item.get("timestamp", "") or "").strip(),
+                            )
+                        )
+        files_folder = folder / "聊天文件"
+        if not files_folder.exists():
+            files_folder = folder / "files"
         if files_folder.exists():
             file_items = sorted([path for path in files_folder.iterdir() if path.is_file()], key=lambda item: item.stat().st_mtime)
             for path in file_items:
@@ -210,7 +319,40 @@ class RelayService:
                         collected_at=datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
                     )
                 )
-        warning = "" if rows else "导出目录里没有识别到可转发的文本或文件。"
+        warning = "" if rows else "文件夹里没有识别到可转发的文本或文件。"
+        return RelayCollectionResult(source_session=source_session, rows=rows, warning=warning)
+
+    def _load_relay_package_rows(self, folder: Path, manifest_path: Path) -> RelayCollectionResult:
+        if manifest_path.suffix.lower() == ".xlsx":
+            items = load_table_rows(manifest_path)
+            source_session = self._guess_export_session_name(folder)
+        else:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            source_session = str(payload.get("source_session", "") or "").strip()
+            items = payload.get("items", [])
+        rows: list[RelayPackageRow] = []
+        if isinstance(items, list):
+            for index, item in enumerate(items, start=1):
+                if not isinstance(item, dict):
+                    continue
+                item_type = self._parse_item_type(
+                    str(item.get("item_type", "") or item.get("类型", "") or RelayItemType.TEXT.value)
+                )
+                relative_path = str(item.get("file_path", "") or item.get("相对路径", "") or "").strip()
+                absolute_path = ""
+                if relative_path:
+                    absolute_path = str((folder / relative_path).resolve())
+                rows.append(
+                    RelayPackageRow(
+                        sequence=index,
+                        item_type=item_type,
+                        source_session=source_session,
+                        content=str(item.get("content", "") or item.get("内容预览", "") or "").strip(),
+                        file_path=absolute_path,
+                        collected_at=str(item.get("collected_at", "") or item.get("采集时间", "") or "").strip(),
+                    )
+                )
+        warning = "" if rows else "发送文件夹中没有识别到可导入的内容。"
         return RelayCollectionResult(source_session=source_session, rows=rows, warning=warning)
 
     def send_package(
@@ -231,7 +373,7 @@ class RelayService:
         else:
             targets = self._unique_targets([row.downstream_session for row in request.route_rows if row.downstream_session.strip()])
             if not targets:
-                raise ValueError("请先填写至少一个下游会话。")
+                raise ValueError("请先填写至少一个收件人会话。")
         results: list[RelayTargetResult] = []
         success_count = 0
         failure_count = 0
@@ -310,6 +452,58 @@ class RelayService:
         safe_name = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in source_session).strip("_") or "relay-source"
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         return dirs["local_dir"] / "relay-cache" / f"{safe_name}-{timestamp}"
+
+    @staticmethod
+    def _placeholder_media_label(message: str) -> str | None:
+        normalized = message.strip()
+        return MEDIA_PLACEHOLDER_LABELS.get(normalized)
+
+    @staticmethod
+    def _sanitize_name(value: str) -> str:
+        cleaned = re.sub(r'[\\/:*?"<>|]+', "_", value).strip()
+        return cleaned or "send-package"
+
+    @staticmethod
+    def _guess_export_session_name(folder: Path) -> str:
+        match = re.match(r"^(.*)-\d{8}-\d{6}$", folder.name)
+        if match:
+            return match.group(1).strip() or folder.name
+        return folder.name
+
+    @staticmethod
+    def _item_type_label(item_type: RelayItemType) -> str:
+        mapping = {
+            RelayItemType.TEXT: "文本",
+            RelayItemType.FILE: "文件",
+            RelayItemType.IMAGE: "图片",
+        }
+        return mapping[item_type]
+
+    @staticmethod
+    def _parse_item_type(value: str) -> RelayItemType:
+        normalized = value.strip().lower()
+        mapping = {
+            "text": RelayItemType.TEXT,
+            "文本": RelayItemType.TEXT,
+            "file": RelayItemType.FILE,
+            "文件": RelayItemType.FILE,
+            "image": RelayItemType.IMAGE,
+            "图片": RelayItemType.IMAGE,
+        }
+        return mapping.get(normalized, RelayItemType.TEXT)
+
+    @staticmethod
+    def _copy_asset_to_folder(source_path: Path, target_folder: Path, sequence: int) -> Path:
+        if not source_path.is_file():
+            raise ValueError(f"文件不存在：{source_path}")
+        safe_name = source_path.name
+        candidate = target_folder / f"{sequence:03d}-{safe_name}"
+        counter = 1
+        while candidate.exists():
+            candidate = target_folder / f"{sequence:03d}-{counter}-{safe_name}"
+            counter += 1
+        shutil.copy2(source_path, candidate)
+        return candidate
 
     @staticmethod
     def _normalized_file_key(file_path: str) -> str:

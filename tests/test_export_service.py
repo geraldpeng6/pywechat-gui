@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,6 +26,7 @@ class ParseFailureAdapter(FakeAdapter):
 
 
 class ExportServiceTestCase(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl not installed")
     def test_export_bundle_writes_summary_and_messages(self):
         service = ChatExportService(FakeAdapter())
         with tempfile.TemporaryDirectory() as tempdir:
@@ -41,16 +42,14 @@ class ExportServiceTestCase(unittest.TestCase):
             result = service.export_chat_bundle(request, RuntimeOptions())
             export_folder = Path(result.export_folder)
             self.assertTrue(export_folder.exists())
-            self.assertTrue(Path(result.messages_csv).exists())
-            self.assertTrue(Path(result.messages_json).exists())
-            self.assertTrue(Path(result.summary_json).exists())
-            self.assertTrue(Path(result.summary_txt).exists())
+            self.assertTrue(Path(result.messages_xlsx).exists())
             self.assertEqual(result.message_count, 2)
             self.assertEqual(result.file_count, 1)
-            summary = json.loads(Path(result.summary_json).read_text(encoding="utf-8"))
-            self.assertEqual(summary["session_name"], "测试群")
-            self.assertEqual(summary["warnings"], [])
+            self.assertEqual(result.warnings, [])
+            self.assertEqual(Path(result.messages_xlsx).name, "聊天记录.xlsx")
+            self.assertEqual(Path(result.files_folder).name, "聊天文件")
 
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl not installed")
     def test_export_bundle_keeps_messages_when_chat_file_parse_fails(self):
         service = ChatExportService(ParseFailureAdapter())
         with tempfile.TemporaryDirectory() as tempdir:
@@ -66,9 +65,36 @@ class ExportServiceTestCase(unittest.TestCase):
             result = service.export_chat_bundle(request, RuntimeOptions())
             self.assertEqual(result.message_count, 2)
             self.assertEqual(result.file_count, 0)
-            self.assertTrue(result.messages_csv)
+            self.assertTrue(result.messages_xlsx)
             self.assertTrue(result.files_folder)
             self.assertTrue(any("聊天文件未整理到结果中" in warning for warning in result.warnings))
+
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl not installed")
+    def test_export_bundle_orders_messages_from_oldest_to_newest(self):
+        class ReverseAdapter(FakeAdapter):
+            def dump_chat_history(self, session_name, number, options):
+                return ["较新的消息", "较早的消息"], ["今天 10:01", "今天 10:00"]
+
+        service = ChatExportService(ReverseAdapter())
+        with tempfile.TemporaryDirectory() as tempdir:
+            result = service.export_chat_bundle(
+                ChatExportRequest(
+                    session_name="好友A",
+                    target_folder=tempdir,
+                    export_messages=True,
+                    export_files=False,
+                    message_limit=10,
+                    file_limit=10,
+                ),
+                RuntimeOptions(),
+            )
+            from openpyxl import load_workbook
+
+            workbook = load_workbook(result.messages_xlsx)
+            sheet = workbook.active
+            rows = list(sheet.iter_rows(values_only=True))
+            self.assertEqual(rows[1][2], "较早的消息")
+            self.assertEqual(rows[2][2], "较新的消息")
 
 
 if __name__ == "__main__":

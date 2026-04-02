@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ from pyweixin_gui.models import (
     RelayCollectFilesRequest,
     RelayCollectTextRequest,
     RelayItemType,
+    RelayPackageExportRequest,
     RelayPackageRow,
     RelayRouteRow,
     RelaySendRequest,
@@ -67,6 +69,17 @@ class RelayServiceTestCase(unittest.TestCase):
         self.assertEqual(result.rows[1].sequence, 2)
         self.assertEqual(result.rows[1].content, "较新的消息")
 
+    def test_collect_text_rows_skips_media_placeholders(self):
+        class PlaceholderAdapter(FakeAdapter):
+            def dump_chat_history(self, session_name, number, options):
+                return ["图片", "正常文本", "视频"], ["今天 10:02", "今天 10:01", "今天 10:00"]
+
+        service = RelayService(PlaceholderAdapter())
+        result = service.collect_text_rows(RelayCollectTextRequest(source_session="上游A", message_limit=3), self.options)
+        self.assertEqual(len(result.rows), 1)
+        self.assertEqual(result.rows[0].content, "正常文本")
+        self.assertIn("已自动跳过", result.warning)
+
     def test_collect_file_rows(self):
         result = self.service.collect_file_rows(RelayCollectFilesRequest(source_session="上游A", file_limit=5), self.options)
         self.assertEqual(len(result.rows), 2)
@@ -123,6 +136,31 @@ class RelayServiceTestCase(unittest.TestCase):
         self.assertEqual(result.rows[0].item_type, RelayItemType.TEXT)
         self.assertEqual(result.rows[0].content, "文本2")
         self.assertEqual(result.rows[1].content, "文本1")
+
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl not installed")
+    def test_export_package_folder_and_reload(self):
+        with TemporaryDirectory() as tempdir:
+            image_path = Path(tempdir) / "海报.png"
+            image_path.write_text("png", encoding="utf-8")
+            rows = [
+                RelayPackageRow(sequence=1, item_type=RelayItemType.TEXT, content="第一条", collected_at="今天 09:00"),
+                RelayPackageRow(sequence=2, item_type=RelayItemType.IMAGE, content=image_path.name, file_path=str(image_path), collected_at="今天 09:01"),
+            ]
+            request = RelayPackageExportRequest(
+                source_session="上游A",
+                package_name="测试转发包",
+                target_folder=tempdir,
+                package_rows=rows,
+            )
+            exported = self.service.export_package_folder(request)
+            self.assertTrue(Path(exported.package_folder).exists())
+            self.assertTrue(Path(exported.manifest_path).exists())
+            reloaded = self.service.load_folder_rows(exported.package_folder)
+            self.assertEqual(reloaded.source_session, "上游A")
+            self.assertEqual(len(reloaded.rows), 2)
+            self.assertEqual(reloaded.rows[0].content, "第一条")
+            self.assertEqual(reloaded.rows[1].item_type, RelayItemType.IMAGE)
+            self.assertTrue(Path(reloaded.rows[1].file_path).is_file())
 
     def test_keep_latest_file_rows(self):
         with TemporaryDirectory() as tempdir:

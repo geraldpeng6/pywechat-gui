@@ -12,6 +12,9 @@ from typing import Any
 class TaskType(str, Enum):
     MESSAGE = "message"
     FILE = "file"
+    RELAY_VALIDATE = "relay_validate"
+    RELAY_TEST_SEND = "relay_test_send"
+    RELAY_SEND = "relay_send"
 
 
 def _parse_bool(value: Any, default: bool = False) -> bool:
@@ -305,11 +308,8 @@ class ChatExportResult:
     export_folder: str
     message_count: int = 0
     file_count: int = 0
-    messages_csv: str | None = None
-    messages_json: str | None = None
+    messages_xlsx: str | None = None
     files_folder: str | None = None
-    summary_json: str | None = None
-    summary_txt: str | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -321,7 +321,6 @@ class ChatBatchExportResult:
     failure_count: int
     session_results: list[ChatExportResult] = field(default_factory=list)
     failed_sessions: list[dict[str, str]] = field(default_factory=list)
-    summary_txt: str | None = None
 
 
 class ResourceExportKind(str, Enum):
@@ -478,7 +477,7 @@ class RelayRouteRow:
     def validate(self) -> dict[str, str]:
         errors: dict[str, str] = {}
         if not self.downstream_session:
-            errors["downstream_session"] = "下游会话不能为空"
+            errors["downstream_session"] = "收件人会话不能为空"
         return errors
 
 
@@ -518,15 +517,50 @@ class RelayCollectionResult:
 
 
 @dataclass
+class RelayPackageExportRequest:
+    source_session: str
+    package_rows: list[RelayPackageRow] = field(default_factory=list)
+    target_folder: str = ""
+    package_name: str = ""
+
+    def validate(self) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        if not self.target_folder.strip():
+            errors["target_folder"] = "请选择导出文件夹"
+        if not self.package_rows:
+            errors["package_rows"] = "请先准备至少一条转发内容"
+        else:
+            for index, row in enumerate(self.package_rows, start=1):
+                row_errors = row.validate()
+                if row_errors:
+                    errors["package_rows"] = f"第 {index} 条内容未填写完整：{next(iter(row_errors.values()))}"
+                    break
+        return errors
+
+
+@dataclass
+class RelayPackageExportResult:
+    source_session: str
+    package_name: str
+    package_folder: str
+    item_count: int
+    message_count: int = 0
+    file_count: int = 0
+    manifest_path: str | None = None
+    messages_json: str | None = None
+    messages_txt: str | None = None
+    files_folder: str | None = None
+    summary_txt: str | None = None
+
+
+@dataclass
 class RelayValidationRequest:
     source_session: str
     route_rows: list[RelayRouteRow] = field(default_factory=list)
 
     def validate(self) -> dict[str, str]:
-        if not self.source_session.strip():
-            return {"source_session": "请先填写当前上游会话"}
         if not [row for row in self.route_rows if row.downstream_session.strip()]:
-            return {"route_rows": "请先填写至少一个下游会话"}
+            return {"route_rows": "请先填写至少一个收件人会话"}
         return {}
 
 
@@ -556,10 +590,8 @@ class RelaySendRequest:
                 if row_errors:
                     errors["package_rows"] = f"第 {index} 条内容未填写完整：{next(iter(row_errors.values()))}"
                     break
-        if not self.test_only and not self.source_session.strip():
-            errors["source_session"] = "正式发送前请先填写上游会话"
         if not self.test_only and not [row for row in self.route_rows if row.downstream_session.strip()]:
-            errors["route_rows"] = "请先填写至少一个下游会话"
+            errors["route_rows"] = "请先填写至少一个收件人会话"
         return errors
 
 
@@ -591,6 +623,39 @@ def dataclass_from_json(task_type: TaskType, payload: str) -> list[MessageBatchR
     if task_type is TaskType.MESSAGE:
         return [MessageBatchRow.from_mapping(row) for row in rows]
     return [FileBatchRow.from_mapping(row) for row in rows]
+
+
+def relay_template_to_json(
+    source_session: str,
+    package_name: str,
+    package_rows: list[RelayPackageRow],
+    route_rows: list[RelayRouteRow],
+) -> str:
+    payload = {
+        "source_session": source_session,
+        "package_name": package_name,
+        "package_rows": [
+            {
+                **asdict(row),
+                "item_type": row.item_type.value,
+            }
+            for row in package_rows
+        ],
+        "route_rows": [asdict(row) for row in route_rows],
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def relay_template_from_json(payload: str) -> dict[str, Any]:
+    raw = json.loads(payload or "{}")
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "source_session": _normalize_text(raw.get("source_session")),
+        "package_name": _normalize_text(raw.get("package_name")),
+        "package_rows": [RelayPackageRow.from_mapping(item) for item in raw.get("package_rows", []) if isinstance(item, dict)],
+        "route_rows": [RelayRouteRow.from_mapping(item) for item in raw.get("route_rows", []) if isinstance(item, dict)],
+    }
 
 
 def clone_row(row: MessageBatchRow | FileBatchRow) -> MessageBatchRow | FileBatchRow:

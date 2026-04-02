@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import csv
-import json
 import re
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 from .adapter import PyWeixinAdapter
+from .import_export import dump_table
 from .models import ChatBatchExportRequest, ChatBatchExportResult, ChatExportRequest, ChatExportResult, RuntimeOptions
 
 
@@ -18,7 +16,7 @@ StopCallback = Callable[[], bool]
 
 def _sanitize_filename(value: str) -> str:
     cleaned = re.sub(r'[\\/:*?"<>|]+', "_", value).strip()
-    return cleaned or "chat-export"
+    return cleaned or "会话导出"
 
 
 class ChatExportService:
@@ -49,30 +47,29 @@ class ChatExportService:
                 number=request.message_limit,
                 options=runtime_options,
             )
-            result.message_count = len(messages)
-            csv_path = export_folder / "messages.csv"
-            json_path = export_folder / "messages.json"
-            self._write_messages_csv(csv_path, messages, timestamps)
-            json_path.write_text(
-                json.dumps(
-                    [
-                        {"index": index + 1, "timestamp": timestamps[index] if index < len(timestamps) else "", "message": message}
-                        for index, message in enumerate(messages)
-                    ],
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
+            ordered_messages = self._ordered_message_rows(messages, timestamps)
+            result.message_count = len(ordered_messages)
+            xlsx_path = export_folder / "聊天记录.xlsx"
+            dump_table(
+                ["序号", "时间", "消息内容"],
+                [
+                    {
+                        "序号": row["index"],
+                        "时间": row["timestamp"],
+                        "消息内容": row["message"],
+                    }
+                    for row in ordered_messages
+                ],
+                xlsx_path,
             )
-            result.messages_csv = str(csv_path)
-            result.messages_json = str(json_path)
+            result.messages_xlsx = str(xlsx_path)
 
         self._check_stop(should_stop)
 
         if request.export_files:
             if on_progress:
                 on_progress("正在导出聊天文件...")
-            files_folder = export_folder / "files"
+            files_folder = export_folder / "聊天文件"
             files_folder.mkdir(parents=True, exist_ok=True)
             result.files_folder = str(files_folder)
             try:
@@ -93,12 +90,6 @@ class ChatExportService:
                 )
 
         result.warnings = warnings
-        summary_json = export_folder / "export-summary.json"
-        summary_txt = export_folder / "export-summary.txt"
-        summary_json.write_text(json.dumps(asdict(result), ensure_ascii=False, indent=2), encoding="utf-8")
-        summary_txt.write_text(self._build_summary_text(result), encoding="utf-8")
-        result.summary_json = str(summary_json)
-        result.summary_txt = str(summary_txt)
         return result
 
     def export_chat_batch(
@@ -110,7 +101,7 @@ class ChatExportService:
     ) -> ChatBatchExportResult:
         target_root = Path(request.target_folder).expanduser().resolve()
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        batch_root = target_root / f"batch-export-{timestamp}"
+        batch_root = target_root / f"批量会话导出-{timestamp}"
         batch_root.mkdir(parents=True, exist_ok=True)
 
         session_results: list[ChatExportResult] = []
@@ -149,24 +140,22 @@ class ChatExportService:
             session_results=session_results,
             failed_sessions=failed_sessions,
         )
-        summary_path = batch_root / "batch-export-summary.txt"
-        summary_path.write_text(self._build_batch_summary(summary), encoding="utf-8")
-        summary.summary_txt = str(summary_path)
         return summary
 
     @staticmethod
-    def _write_messages_csv(path: Path, messages: list[str], timestamps: list[str]) -> None:
-        with path.open("w", encoding="utf-8-sig", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=["index", "timestamp", "message"])
-            writer.writeheader()
-            for index, message in enumerate(messages):
-                writer.writerow(
-                    {
-                        "index": index + 1,
-                        "timestamp": timestamps[index] if index < len(timestamps) else "",
-                        "message": message,
-                    }
-                )
+    def _ordered_message_rows(messages: list[str], timestamps: list[str]) -> list[dict[str, str | int]]:
+        rows = [
+            {
+                "index": index + 1,
+                "timestamp": timestamps[index] if index < len(timestamps) else "",
+                "message": message,
+            }
+            for index, message in enumerate(messages)
+        ]
+        rows.reverse()
+        for index, row in enumerate(rows, start=1):
+            row["index"] = index
+        return rows
 
     @staticmethod
     def _build_summary_text(result: ChatExportResult) -> str:
@@ -176,31 +165,13 @@ class ChatExportService:
             f"消息数量：{result.message_count}",
             f"文件数量：{result.file_count}",
         ]
-        if result.messages_csv:
-            lines.append(f"消息 CSV：{result.messages_csv}")
-        if result.messages_json:
-            lines.append(f"消息 JSON：{result.messages_json}")
+        if result.messages_xlsx:
+            lines.append(f"聊天记录：{result.messages_xlsx}")
         if result.files_folder:
             lines.append(f"文件目录：{result.files_folder}")
         if result.warnings:
             lines.append("注意事项：")
             lines.extend(f"- {warning}" for warning in result.warnings)
-        return "\n".join(lines)
-
-    @staticmethod
-    def _build_batch_summary(result: ChatBatchExportResult) -> str:
-        lines = [
-            f"批量导出目录：{result.export_root}",
-            f"会话总数：{result.total_sessions}",
-            f"成功数量：{result.success_count}",
-            f"失败数量：{result.failure_count}",
-        ]
-        if result.session_results:
-            lines.append("成功会话：")
-            lines.extend(f"- {item.session_name}: {item.export_folder}" for item in result.session_results)
-        if result.failed_sessions:
-            lines.append("失败会话：")
-            lines.extend(f"- {item['session_name']}: {item['error']}" for item in result.failed_sessions)
         return "\n".join(lines)
 
     @staticmethod

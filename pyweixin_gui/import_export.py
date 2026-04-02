@@ -39,7 +39,7 @@ ROUTE_HEADERS = [
 ]
 
 ROUTE_TEMPLATE_HEADERS = [
-    "下游会话",
+    "收件人会话",
 ]
 
 ROUTE_HEADER_ALIASES = {
@@ -50,9 +50,14 @@ ROUTE_HEADER_ALIASES = {
     "source_session": "upstream_session",
     "downstream_session": "downstream_session",
     "下游会话": "downstream_session",
+    "收件人会话": "downstream_session",
+    "收件人": "downstream_session",
+    "目标会话": "downstream_session",
     "target_session": "downstream_session",
     "downstream_sessions": "downstream_sessions",
     "下游会话列表": "downstream_sessions",
+    "收件人列表": "downstream_sessions",
+    "收件人会话列表": "downstream_sessions",
     "remark": "remark",
     "备注": "remark",
 }
@@ -94,26 +99,23 @@ def _load_xlsx_rows(path: Path) -> list[dict[str, Any]]:
 
 
 def load_rows(task_type: TaskType, path: str | Path) -> list[MessageBatchRow] | list[FileBatchRow]:
-    file_path = Path(path)
-    if file_path.suffix.lower() == ".csv":
-        rows = _load_csv_rows(file_path)
-    elif file_path.suffix.lower() == ".xlsx":
-        rows = _load_xlsx_rows(file_path)
-    else:
-        raise ValueError("仅支持导入 .csv 或 .xlsx 文件")
+    rows = load_table_rows(path)
     if task_type is TaskType.MESSAGE:
         return [MessageBatchRow.from_mapping(row) for row in rows]
     return [FileBatchRow.from_mapping(row) for row in rows]
 
 
-def load_route_rows(path: str | Path) -> list[RelayRouteRow]:
+def load_table_rows(path: str | Path) -> list[dict[str, Any]]:
     file_path = Path(path)
     if file_path.suffix.lower() == ".csv":
-        rows = _load_csv_rows(file_path)
-    elif file_path.suffix.lower() == ".xlsx":
-        rows = _load_xlsx_rows(file_path)
-    else:
-        raise ValueError("路由表仅支持导入 .csv 或 .xlsx 文件")
+        return _load_csv_rows(file_path)
+    if file_path.suffix.lower() == ".xlsx":
+        return _load_xlsx_rows(file_path)
+    raise ValueError("仅支持导入 .csv 或 .xlsx 文件")
+
+
+def load_route_rows(path: str | Path) -> list[RelayRouteRow]:
+    rows = load_table_rows(path)
     normalized = [_normalize_route_mapping(row) for row in rows]
     expanded: list[RelayRouteRow] = []
     for row in normalized:
@@ -152,7 +154,7 @@ def dump_route_rows(rows: list[dict[str, Any]], path: str | Path) -> None:
     for row in rows:
         template_rows.append(
             {
-                "下游会话": row.get("downstream_session", ""),
+                "收件人会话": row.get("downstream_session", ""),
             }
         )
     dump_table(ROUTE_TEMPLATE_HEADERS, template_rows, path)

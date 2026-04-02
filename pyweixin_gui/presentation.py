@@ -8,7 +8,37 @@ from .models import ChatBatchExportRequest, ChatExportRequest, ExecutionRecord, 
 
 
 def template_type_label(task_type: TaskType) -> str:
-    return "批量消息" if task_type is TaskType.MESSAGE else "批量文件"
+    labels = {
+        TaskType.MESSAGE: "批量消息",
+        TaskType.FILE: "批量文件",
+        TaskType.RELAY_VALIDATE: "收件人验证",
+        TaskType.RELAY_TEST_SEND: "发送测试",
+        TaskType.RELAY_SEND: "发送任务",
+    }
+    return labels.get(task_type, task_type.value)
+
+
+def execution_type_label(task_type: TaskType) -> str:
+    labels = {
+        TaskType.MESSAGE: "批量消息",
+        TaskType.FILE: "批量文件",
+        TaskType.RELAY_VALIDATE: "收件人验证",
+        TaskType.RELAY_TEST_SEND: "发送测试",
+        TaskType.RELAY_SEND: "正式发送",
+    }
+    return labels.get(task_type, task_type.value)
+
+
+def export_type_label(export_kind: str) -> str:
+    mapping = {
+        "chat": "会话导出",
+        "chat_batch": "批量会话导出",
+        "relay_package": "发送文件夹",
+        "recent_files": "最近聊天文件",
+        "wxfiles": "微信聊天文件",
+        "videos": "微信聊天视频",
+    }
+    return mapping.get(export_kind, export_kind or "未知")
 
 
 def filter_templates(templates: list[TaskTemplate], query: str) -> list[TaskTemplate]:
@@ -26,8 +56,10 @@ def filter_templates(templates: list[TaskTemplate], query: str) -> list[TaskTemp
 def template_metrics(templates: list[TaskTemplate]) -> dict[str, int]:
     return {
         "total": len(templates),
+        "send": sum(1 for template in templates if template.task_type is TaskType.RELAY_SEND),
         "message": sum(1 for template in templates if template.task_type is TaskType.MESSAGE),
         "file": sum(1 for template in templates if template.task_type is TaskType.FILE),
+        "legacy": sum(1 for template in templates if template.task_type in {TaskType.MESSAGE, TaskType.FILE}),
     }
 
 
@@ -40,7 +72,7 @@ def filter_executions(executions: list[ExecutionRecord], query: str, failed_only
         haystack = " ".join(
             [
                 str(execution.id or ""),
-                template_type_label(execution.task_type),
+                execution_type_label(execution.task_type),
                 execution.started_at,
                 execution.status,
                 str(execution.success_count),
@@ -89,7 +121,7 @@ def format_export_history_detail(record: ExportHistoryRecord) -> str:
     detail = parse_export_detail(record)
     result = detail.get("result", detail)
     lines = [
-        f"导出类型：{record.export_kind}",
+        f"导出类型：{export_type_label(record.export_kind)}",
         f"标题：{record.title}",
         f"导出目录：{record.export_folder}",
         f"导出数量：{record.exported_count}",
@@ -190,6 +222,13 @@ def _request_lines(export_kind: str, request: dict) -> list[tuple[str, str]]:
             ("消息条数", str(request.get("message_limit", ""))),
             ("文件数量", str(request.get("file_limit", ""))),
         ]
+    if export_kind == "relay_package":
+        return [
+            ("来源会话", str(request.get("source_session", "")) or "未填写"),
+            ("任务名称", str(request.get("package_name", ""))),
+            ("导出目录", str(request.get("target_folder", ""))),
+            ("内容总数", str(request.get("item_count", ""))),
+        ]
     return [
         ("导出类型", _resource_kind_label(str(request.get("export_kind", "")))),
         ("导出目录", str(request.get("target_folder", ""))),
@@ -222,6 +261,12 @@ def _result_lines(export_kind: str, result: dict) -> list[tuple[str, str]]:
             ("失败会话", str(result.get("failure_count", 0))),
             ("失败名单预览", "、".join(failed_names[:5]) if failed_names else "无"),
         ]
+    if export_kind == "relay_package":
+        return [
+            ("内容总数", str(result.get("item_count", 0))),
+            ("文本条数", str(result.get("message_count", 0))),
+            ("文件条数", str(result.get("file_count", 0))),
+        ]
     exported_paths = result.get("exported_paths", [])
     preview = "；".join(str(item) for item in exported_paths[:3]) if isinstance(exported_paths, list) and exported_paths else "无"
     return [
@@ -236,5 +281,6 @@ def _resource_kind_label(kind: str) -> str:
         "recent_files": "最近聊天文件",
         "wxfiles": "微信聊天文件",
         "videos": "微信聊天视频",
+        "relay_package": "发送文件夹",
     }
     return mapping.get(kind, kind or "未知")

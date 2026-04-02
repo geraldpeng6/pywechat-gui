@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,7 @@ class FakeAdapter:
 
 
 class BatchExportServiceTestCase(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl not installed")
     def test_batch_export_records_success_and_failure(self):
         service = ChatExportService(FakeAdapter())
         with tempfile.TemporaryDirectory() as tempdir:
@@ -37,7 +39,7 @@ class BatchExportServiceTestCase(unittest.TestCase):
             self.assertEqual(result.total_sessions, 3)
             self.assertEqual(result.success_count, 2)
             self.assertEqual(result.failure_count, 1)
-            self.assertTrue(Path(result.summary_txt).exists())
+            self.assertEqual(Path(result.export_root).name.startswith("批量会话导出-"), True)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 from PySide6.QtCore import QThread, Qt
@@ -34,8 +35,8 @@ from ..executor import BatchExecutor, failed_rows_from_execution
 from ..export_service import ChatExportService
 from ..export_worker import ChatExportWorker
 from ..import_export import dump_rows
-from ..models import AppSettings, ChatBatchExportRequest, ChatBatchExportResult, ChatExportRequest, ChatExportResult, ExportHistoryRecord, FileBatchRow, GroupScanResult, MessageBatchRow, RelayCollectFilesRequest, RelayCollectionResult, RelayCollectTextRequest, RelaySendRequest, RelaySendResult, RelayValidationRequest, RelayValidationResult, ResourceExportRequest, ResourceExportResult, SessionScanRequest, SessionScanResult, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json
-from ..presentation import execution_metrics, export_history_can_rerun, export_history_can_retry_failed, export_history_failed_sessions, filter_executions, filter_templates, format_export_history_detail, rebuild_export_request, serialize_export_detail, summarize_failures, template_metrics, template_type_label
+from ..models import AppSettings, ChatBatchExportRequest, ChatBatchExportResult, ChatExportRequest, ChatExportResult, ExecutionRecord, ExecutionRowResult, ExportHistoryRecord, FileBatchRow, GroupScanResult, MessageBatchRow, RelayCollectFilesRequest, RelayCollectionResult, RelayCollectTextRequest, RelayPackageExportRequest, RelayPackageExportResult, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelaySendResult, RelayValidationRequest, RelayValidationResult, ResourceExportRequest, ResourceExportResult, SessionScanRequest, SessionScanResult, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json, relay_template_from_json, relay_template_to_json
+from ..presentation import execution_metrics, execution_type_label, export_history_can_rerun, export_history_can_retry_failed, export_history_failed_sessions, export_type_label, filter_executions, filter_templates, format_export_history_detail, rebuild_export_request, serialize_export_detail, summarize_failures, template_metrics, template_type_label
 from ..relay_service import RelayService
 from ..relay_worker import RelayWorker
 from ..resource_export_service import ResourceExportService, export_kind_label
@@ -46,7 +47,7 @@ from ..settings_manager import SettingsManager
 from ..storage import AppStorage
 from ..system_ops import open_path
 from ..worker import BatchWorker
-from .widgets import BatchPage, DashboardPage, ExportHistoryPage, ExportPage, HistoryPage, RelayWorkbenchPage, ResourceToolsPage, SessionToolsPage, SettingsPage, TemplatesPage
+from .widgets import BatchPage, DashboardPage, ExportCenterPage, RecordsCenterPage, RelayWorkbenchPage, SettingsPage, TemplatesPage
 
 
 class MainWindow(QMainWindow):
@@ -75,6 +76,8 @@ class MainWindow(QMainWindow):
         self._execution_cache = []
         self._export_history_cache: list[ExportHistoryRecord] = []
         self._last_deleted_template: TaskTemplate | None = None
+        self._page_rows: dict[QWidget, int] = {}
+        self._stack_indexes: dict[QWidget, int] = {}
 
         self.setWindowTitle("AutoWeChat 工作台")
         self.resize(self.settings.window_width, self.settings.window_height)
@@ -108,27 +111,26 @@ class MainWindow(QMainWindow):
         self.dashboard_page = DashboardPage()
         self.message_page = BatchPage(TaskType.MESSAGE, "批量消息")
         self.file_page = BatchPage(TaskType.FILE, "批量文件")
-        self.export_page = ExportPage()
-        self.resource_page = ResourceToolsPage()
-        self.session_tools_page = SessionToolsPage()
+        self.export_center_page = ExportCenterPage()
+        self.export_page = self.export_center_page.export_page
+        self.resource_page = self.export_center_page.resource_page
+        self.session_tools_page = self.export_center_page.session_tools_page
         self.relay_page = RelayWorkbenchPage()
         self.templates_page = TemplatesPage()
-        self.history_page = HistoryPage()
-        self.export_history_page = ExportHistoryPage()
+        self.records_page = RecordsCenterPage()
+        self.history_page = self.records_page.history_page
+        self.export_history_page = self.records_page.export_history_page
         self.settings_page = SettingsPage()
 
         self._add_page("首页", self.dashboard_page)
-        self._add_page("批量消息", self.message_page)
-        self._add_page("批量文件", self.file_page)
-        self._add_page("会话导出", self.export_page)
-        self._add_page("资源导出", self.resource_page)
-        self._add_page("会话与群工具", self.session_tools_page)
-        self._add_page("转发工作台", self.relay_page)
+        self._add_page("发送工作台", self.relay_page)
+        self._add_page("导出中心", self.export_center_page)
         self._add_page("模板中心", self.templates_page)
-        self._add_page("执行历史", self.history_page)
-        self._add_page("导出历史", self.export_history_page)
+        self._add_page("记录中心", self.records_page)
         self._add_page("设置", self.settings_page)
-        self.nav.setCurrentRow(0)
+        self._add_hidden_page(self.message_page)
+        self._add_hidden_page(self.file_page)
+        self._open_page(self.dashboard_page)
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
 
         self._bind_events()
@@ -141,7 +143,15 @@ class MainWindow(QMainWindow):
         self._set_running_state(False)
 
     def _add_page(self, title: str, page: QWidget) -> None:
+        row = self.nav.count()
         self.nav.addItem(QListWidgetItem(title))
+        self._page_rows[page] = row
+        self._add_stack_page(page)
+
+    def _add_hidden_page(self, page: QWidget) -> None:
+        self._add_stack_page(page)
+
+    def _add_stack_page(self, page: QWidget) -> None:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -156,7 +166,37 @@ class MainWindow(QMainWindow):
         container_layout.addStretch(1)
 
         scroll.setWidget(container)
-        self.stack.addWidget(scroll)
+        index = self.stack.addWidget(scroll)
+        self._stack_indexes[page] = index
+
+    def _page_row(self, page: QWidget) -> int:
+        return self._page_rows[page]
+
+    def _open_page(self, page: QWidget) -> None:
+        if page in self._page_rows:
+            self.nav.setCurrentRow(self._page_row(page))
+            return
+        self.stack.setCurrentIndex(self._stack_indexes[page])
+
+    def _open_history_page(self) -> None:
+        self.records_page.show_execution_tab()
+        self._open_page(self.records_page)
+
+    def _open_export_history_page(self) -> None:
+        self.records_page.show_export_tab()
+        self._open_page(self.records_page)
+
+    def _open_chat_export_page(self) -> None:
+        self.export_center_page.show_chat_export_tab()
+        self._open_page(self.export_center_page)
+
+    def _open_resource_export_page(self) -> None:
+        self.export_center_page.show_resource_export_tab()
+        self._open_page(self.export_center_page)
+
+    def _open_session_tools_page(self) -> None:
+        self.export_center_page.show_session_tools_tab()
+        self._open_page(self.export_center_page)
 
     def _show_welcome_if_needed(self) -> None:
         if self.settings.first_run_risk_ack:
@@ -167,8 +207,8 @@ class MainWindow(QMainWindow):
             "欢迎使用 AutoWeChat 办公助手。\n\n"
             "推荐你按这个顺序操作：\n"
             "1. 首页检查微信状态\n"
-            "2. 去批量页面导入或填写表格\n"
-            "3. 先校验，再执行\n\n"
+            "2. 去发送工作台整理内容和收件人\n"
+            "3. 先验证或测试，再正式发送\n\n"
             "执行期间请不要手动操作微信。",
         )
         self.settings.first_run_risk_ack = True
@@ -176,9 +216,9 @@ class MainWindow(QMainWindow):
 
     def _bind_events(self) -> None:
         self.dashboard_page.refresh_requested.connect(self.refresh_environment)
-        self.dashboard_page.open_message_requested.connect(lambda: self.nav.setCurrentRow(1))
-        self.dashboard_page.open_file_requested.connect(lambda: self.nav.setCurrentRow(2))
-        self.dashboard_page.open_templates_requested.connect(lambda: self.nav.setCurrentRow(7))
+        self.dashboard_page.open_message_requested.connect(lambda: self._open_page(self.relay_page))
+        self.dashboard_page.open_file_requested.connect(self._open_chat_export_page)
+        self.dashboard_page.open_templates_requested.connect(lambda: self._open_page(self.templates_page))
         self.message_page.run_requested.connect(lambda rows, src: self.start_batch(TaskType.MESSAGE, rows, src))
         self.file_page.run_requested.connect(lambda rows, src: self.start_batch(TaskType.FILE, rows, src))
         self.message_page.stop_requested.connect(self.stop_batch)
@@ -195,7 +235,10 @@ class MainWindow(QMainWindow):
         self.session_tools_page.use_session_names_requested.connect(self.load_session_names_into_export_page)
         self.relay_page.collect_texts_requested.connect(self.start_relay_collect_texts)
         self.relay_page.collect_files_requested.connect(self.start_relay_collect_files)
-        self.relay_page.import_export_folder_requested.connect(self.import_relay_export_folder)
+        self.relay_page.import_folder_requested.connect(self.import_relay_folder)
+        self.relay_page.export_package_requested.connect(self.export_relay_package)
+        self.relay_page.save_template_requested.connect(self.save_template)
+        self.relay_page.open_templates_requested.connect(self.open_templates_for)
         self.relay_page.validate_routes_requested.connect(self.start_relay_validate_routes)
         self.relay_page.test_send_requested.connect(self.start_relay_test_send)
         self.relay_page.send_requested.connect(self.start_relay_send)
@@ -206,8 +249,8 @@ class MainWindow(QMainWindow):
 
         self.templates_page.refresh_button.clicked.connect(self.refresh_templates)
         self.templates_page.search_input.textChanged.connect(self.apply_template_filter)
-        self.templates_page.create_message_requested.connect(lambda: self.nav.setCurrentRow(1))
-        self.templates_page.create_file_requested.connect(lambda: self.nav.setCurrentRow(2))
+        self.templates_page.create_message_requested.connect(lambda: self._open_page(self.relay_page))
+        self.templates_page.create_file_requested.connect(lambda: self._open_page(self.relay_page))
         self.templates_page.load_button.clicked.connect(self.load_selected_template)
         self.templates_page.delete_button.clicked.connect(self.delete_selected_template)
         self.templates_page.restore_button.clicked.connect(self.restore_deleted_template)
@@ -218,8 +261,8 @@ class MainWindow(QMainWindow):
         self.history_page.refresh_button.clicked.connect(self.refresh_history)
         self.history_page.search_input.textChanged.connect(self.apply_history_filter)
         self.history_page.failed_only_checkbox.toggled.connect(self.apply_history_filter)
-        self.history_page.open_message_requested.connect(lambda: self.nav.setCurrentRow(1))
-        self.history_page.open_file_requested.connect(lambda: self.nav.setCurrentRow(2))
+        self.history_page.open_message_requested.connect(lambda: self._open_page(self.relay_page))
+        self.history_page.open_file_requested.connect(self._open_chat_export_page)
         self.history_page.clear_button.clicked.connect(self.clear_history)
         self.history_page.export_failed_button.clicked.connect(self.export_selected_execution_failures)
         self.history_page.execution_table.itemSelectionChanged.connect(self.show_execution_details)
@@ -264,16 +307,18 @@ class MainWindow(QMainWindow):
             for column_index, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if column_index == 2:
-                    if template.task_type is TaskType.MESSAGE:
+                    if template.task_type is TaskType.RELAY_SEND:
+                        item.setBackground(QColor("#dcfce7"))
+                    elif template.task_type is TaskType.MESSAGE:
                         item.setBackground(QColor("#dbeafe"))
-                    else:
+                    elif template.task_type is TaskType.FILE:
                         item.setBackground(QColor("#fef3c7"))
                 table.setItem(row_index, column_index, item)
         table.resizeColumnsToContents()
         metrics = template_metrics(templates)
         self.templates_page.total_templates_label.value_label.setText(str(metrics["total"]))  # type: ignore[attr-defined]
-        self.templates_page.message_templates_label.value_label.setText(str(metrics["message"]))  # type: ignore[attr-defined]
-        self.templates_page.file_templates_label.value_label.setText(str(metrics["file"]))  # type: ignore[attr-defined]
+        self.templates_page.send_templates_label.value_label.setText(str(metrics["send"]))  # type: ignore[attr-defined]
+        self.templates_page.legacy_templates_label.value_label.setText(str(metrics["legacy"]))  # type: ignore[attr-defined]
         if filtered:
             self.templates_page.summary_label.setText(
                 f"当前显示 {len(filtered)} / {len(templates)} 个模板。双击或选中后可加载到工作台。"
@@ -282,7 +327,7 @@ class MainWindow(QMainWindow):
             if templates:
                 self.templates_page.summary_label.setText("没有匹配到模板，请换个关键词再试。")
             else:
-                self.templates_page.summary_label.setText("还没有模板。你可以先去批量页面整理一份任务，再点“保存模板”。")
+                self.templates_page.summary_label.setText("还没有模板。你可以先在发送工作台整理内容和收件人，再点“保存模板”。")
         has_templates = bool(templates)
         self.templates_page.create_message_button.setVisible(not has_templates)
         self.templates_page.create_file_button.setVisible(not has_templates)
@@ -306,7 +351,7 @@ class MainWindow(QMainWindow):
             table.insertRow(row_index)
             values = [
                 str(execution.id),
-                template_type_label(execution.task_type),
+                execution_type_label(execution.task_type),
                 execution.started_at,
                 execution.status,
                 str(execution.row_count),
@@ -351,8 +396,12 @@ class MainWindow(QMainWindow):
         page.send_delay.setValue(self.settings.send_delay)
         page.window_width.setValue(self.settings.window_width)
         page.window_height.setValue(self.settings.window_height)
-        page.import_encoding.setCurrentText(self.settings.import_encoding)
-        page.theme.setCurrentText(self.settings.theme)
+        encoding_index = page.import_encoding.findData(self.settings.import_encoding)
+        if encoding_index >= 0:
+            page.import_encoding.setCurrentIndex(encoding_index)
+        theme_index = page.theme.findData(self.settings.theme)
+        if theme_index >= 0:
+            page.theme.setCurrentIndex(theme_index)
 
     def save_settings(self) -> None:
         page = self.settings_page
@@ -364,8 +413,8 @@ class MainWindow(QMainWindow):
             clear=page.clear.isChecked(),
             window_width=page.window_width.value(),
             window_height=page.window_height.value(),
-            import_encoding=page.import_encoding.currentText(),
-            theme=page.theme.currentText(),
+            import_encoding=str(page.import_encoding.currentData() or "auto"),
+            theme=str(page.theme.currentData() or "light"),
             history_retention=self.settings.history_retention,
             first_run_risk_ack=True,
         )
@@ -373,20 +422,32 @@ class MainWindow(QMainWindow):
         self.resize(self.settings.window_width, self.settings.window_height)
         self.status_bar.showMessage("设置已保存", 4000)
 
-    def save_template(self, task_type: TaskType, rows: list[MessageBatchRow] | list[FileBatchRow]) -> None:
+    def save_template(self, task_type: TaskType, rows: list[MessageBatchRow] | list[FileBatchRow] | dict) -> None:
         name, ok = QInputDialog.getText(self, "保存模板", "模板名称")
         if not ok or not name.strip():
             return
-        template = TaskTemplate(name=name.strip(), task_type=task_type, rows_json=dataclass_to_json(rows))
+        if task_type is TaskType.RELAY_SEND:
+            payload = rows if isinstance(rows, dict) else {}
+            rows_json = relay_template_to_json(
+                source_session=str(payload.get("source_session", "") or ""),
+                package_name=str(payload.get("package_name", "") or ""),
+                package_rows=[item for item in payload.get("package_rows", []) if isinstance(item, RelayPackageRow)],
+                route_rows=[item for item in payload.get("route_rows", []) if isinstance(item, RelayRouteRow)],
+            )
+        else:
+            rows_json = dataclass_to_json(rows)  # type: ignore[arg-type]
+        template = TaskTemplate(name=name.strip(), task_type=task_type, rows_json=rows_json)
         self.storage.save_template(template)
         self.refresh_templates()
         self.status_bar.showMessage("模板已保存，下次可以在模板中心直接加载。", 4000)
 
     def open_templates_for(self, task_type: TaskType) -> None:
-        self.nav.setCurrentRow(7)
+        self._open_page(self.templates_page)
         table = self.templates_page.table
+        expected_label = template_type_label(task_type)
         for row_index in range(table.rowCount()):
-            if table.item(row_index, 2).text() == ("批量消息" if task_type is TaskType.MESSAGE else "批量文件"):
+            cell = table.item(row_index, 2)
+            if cell and cell.text() == expected_label:
                 table.selectRow(row_index)
                 break
 
@@ -403,13 +464,18 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "模板中心", "请先选中一个模板。")
             return
         template = self.storage.get_template(template_id)
-        rows = dataclass_from_json(template.task_type, template.rows_json)
-        if template.task_type is TaskType.MESSAGE:
-            self.message_page.load_rows(rows)
-            self.nav.setCurrentRow(1)
+        if template.task_type is TaskType.RELAY_SEND:
+            payload = relay_template_from_json(template.rows_json)
+            self.relay_page.load_template_payload(payload)
+            self._open_page(self.relay_page)
         else:
-            self.file_page.load_rows(rows)
-            self.nav.setCurrentRow(2)
+            rows = dataclass_from_json(template.task_type, template.rows_json)
+            if template.task_type is TaskType.MESSAGE:
+                self.message_page.load_rows(rows)
+                self._open_page(self.message_page)
+            else:
+                self.file_page.load_rows(rows)
+                self._open_page(self.file_page)
         self.status_bar.showMessage(f"已加载模板：{template.name}", 5000)
 
     def delete_selected_template(self) -> None:
@@ -469,7 +535,7 @@ class MainWindow(QMainWindow):
             return
         environment = self.adapter.inspect_environment()
         if environment.login_status != "已登录":
-            self.nav.setCurrentRow(0)
+            self._open_page(self.dashboard_page)
             self._show_guidance_dialog(
                 title="暂时不能执行任务",
                 message=environment.status_message,
@@ -511,7 +577,7 @@ class MainWindow(QMainWindow):
             return
         environment = self.adapter.inspect_environment()
         if environment.login_status != "已登录":
-            self.nav.setCurrentRow(0)
+            self._open_page(self.dashboard_page)
             self._show_guidance_dialog(
                 title="暂时不能执行导出",
                 message=environment.status_message,
@@ -544,7 +610,7 @@ class MainWindow(QMainWindow):
             return
         environment = self.adapter.inspect_environment()
         if environment.login_status != "已登录":
-            self.nav.setCurrentRow(0)
+            self._open_page(self.dashboard_page)
             self._show_guidance_dialog(
                 title="暂时不能执行导出",
                 message=environment.status_message,
@@ -577,7 +643,7 @@ class MainWindow(QMainWindow):
             return
         environment = self.adapter.inspect_environment()
         if environment.login_status != "已登录":
-            self.nav.setCurrentRow(0)
+            self._open_page(self.dashboard_page)
             self._show_guidance_dialog(
                 title="暂时不能执行导出",
                 message=environment.status_message,
@@ -619,41 +685,90 @@ class MainWindow(QMainWindow):
         )
 
     def start_relay_collect_texts(self, request: RelayCollectTextRequest) -> None:
-        self._start_relay_worker("collect_texts", request, "正在采集上游文本，请等待完成。")
+        self._start_relay_worker("collect_texts", request, "正在采集来源会话里的文字消息，请等待完成。")
 
     def start_relay_collect_files(self, request: RelayCollectFilesRequest) -> None:
         self._start_relay_worker("collect_files", request, "正在采集上游聊天文件，请等待完成。")
 
-    def import_relay_export_folder(self, folder_path: str) -> None:
+    def import_relay_folder(self, folder_path: str) -> None:
         try:
-            result = self.relay_service.load_export_folder_rows(folder_path)
+            result = self.relay_service.load_folder_rows(folder_path)
         except Exception as exc:
             ui_error = self.adapter.map_runtime_exception(exc)
-            self._show_error_dialog(ui_error, "导入会话导出目录失败")
+            self._show_error_dialog(ui_error, "导入文件夹失败")
             return
         if result.source_session:
             self.relay_page.source_session_input.setText(result.source_session)
         self.relay_page.append_package_rows(
             result.rows,
-            result.warning or f"已从导出目录导入 {len(result.rows)} 条候选内容，请人工勾选真正需要转发的项。",
+            result.warning or f"已从文件夹导入 {len(result.rows)} 条内容，请确认顺序和内容后再发送。",
         )
-        self.status_bar.showMessage("会话导出目录已导入到转发包。", 5000)
+        self.status_bar.showMessage("文件夹内容已导入到发送内容。", 5000)
+
+    def export_relay_package(self, request: RelayPackageExportRequest) -> None:
+        try:
+            result = self.relay_service.export_package_folder(request)
+        except Exception as exc:
+            ui_error = self.adapter.map_runtime_exception(exc)
+            self._show_error_dialog(ui_error, "导出发送文件夹失败")
+            return
+        lines = [
+            "发送文件夹已导出。",
+            f"来源会话：{result.source_session or '未填写'}",
+            f"任务名称：{result.package_name}",
+            f"导出目录：{result.package_folder}",
+            f"内容总数：{result.item_count}",
+            f"文本条数：{result.message_count}",
+            f"文件条数：{result.file_count}",
+        ]
+        if result.manifest_path:
+            lines.append(f"发送清单：{result.manifest_path}")
+        if result.files_folder:
+            lines.append(f"文件目录：{result.files_folder}")
+        self.relay_page.apply_send_result("\n".join(lines))
+        self.relay_page.refresh_package_summary("发送文件夹已导出，可直接交给同事复用，或稍后重新导入。")
+        self._save_export_record(
+            export_kind="relay_package",
+            title=result.package_name,
+            export_folder=result.package_folder,
+            exported_count=result.item_count,
+            summary_path=None,
+            detail_json=serialize_export_detail(
+                "relay_package",
+                {
+                    "source_session": request.source_session,
+                    "package_name": request.package_name,
+                    "target_folder": request.target_folder,
+                    "item_count": len(request.package_rows),
+                },
+                {
+                    "package_folder": result.package_folder,
+                    "item_count": result.item_count,
+                    "message_count": result.message_count,
+                    "file_count": result.file_count,
+                    "manifest_path": result.manifest_path,
+                    "files_folder": result.files_folder,
+                },
+            ),
+        )
+        self.status_bar.showMessage("发送文件夹导出完成。", 5000)
+        QMessageBox.information(self, "导出完成", f"发送文件夹已导出到：\n{result.package_folder}")
 
     def start_relay_validate_routes(self, request: RelayValidationRequest) -> None:
-        self._start_relay_worker("validate_routes", request, "正在验证下游会话，请等待完成。")
+        self._start_relay_worker("validate_routes", request, "正在验证收件人，请等待完成。")
 
     def start_relay_test_send(self, request: RelaySendRequest) -> None:
-        self._start_relay_worker("send_package", request, "正在发送测试包到文件传输助手，请勿手动操作微信。")
+        self._start_relay_worker("send_package", request, "正在把测试内容发送到文件传输助手，请勿手动操作微信。")
 
     def start_relay_send(self, request: RelaySendRequest) -> None:
         answer = QMessageBox.question(
             self,
-            "确认正式批量发送",
-            "正式发送会按转发包当前顺序，向当前上游匹配到的全部下游逐个发送。\n\n是否现在开始？",
+            "确认开始批量发送",
+            "程序会按当前顺序，把所有内容依次发送给列表中的全部收件人。\n\n是否现在开始？",
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        self._start_relay_worker("send_package", request, "正在正式批量发送，请勿手动操作微信。")
+        self._start_relay_worker("send_package", request, "正在批量发送，请勿手动操作微信。")
 
     def _start_session_tools_worker(
         self,
@@ -666,7 +781,7 @@ class MainWindow(QMainWindow):
             return
         environment = self.adapter.inspect_environment()
         if environment.login_status != "已登录":
-            self.nav.setCurrentRow(0)
+            self._open_page(self.dashboard_page)
             self._show_guidance_dialog(
                 title="暂时不能执行采集",
                 message=environment.status_message,
@@ -706,9 +821,9 @@ class MainWindow(QMainWindow):
             return
         environment = self.adapter.inspect_environment()
         if environment.login_status != "已登录":
-            self.nav.setCurrentRow(0)
+            self._open_page(self.dashboard_page)
             self._show_guidance_dialog(
-                title="暂时不能执行转发工作台任务",
+                title="暂时不能执行发送任务",
                 message=environment.status_message,
                 suggestion="\n".join(environment.advice) if environment.advice else "请先解决首页提示的问题，再回来执行。",
             )
@@ -741,7 +856,7 @@ class MainWindow(QMainWindow):
             return
         self.export_page.session_names_input.setPlainText("\n".join(session_names))
         self.export_page.summary_label.setText(f"已从会话与群工具回填 {len(session_names)} 个会话名称。")
-        self.nav.setCurrentRow(3)
+        self._open_chat_export_page()
 
     def stop_batch(self) -> None:
         if self.worker is None:
@@ -792,8 +907,6 @@ class MainWindow(QMainWindow):
                 f"成功数量：{result.success_count}",
                 f"失败数量：{result.failure_count}",
             ]
-            if result.summary_txt:
-                lines.append(f"摘要文件：{result.summary_txt}")
             if result.failed_sessions:
                 lines.append("")
                 lines.append("失败会话：")
@@ -807,7 +920,7 @@ class MainWindow(QMainWindow):
                 title=f"批量会话导出 ({result.total_sessions} 个)",
                 export_folder=result.export_root,
                 exported_count=result.success_count,
-                summary_path=result.summary_txt,
+                summary_path=None,
                 detail_json=serialize_export_detail(
                     "chat_batch",
                     request if isinstance(request, ChatBatchExportRequest) else ChatBatchExportRequest(session_names=[], target_folder=result.export_root),
@@ -829,10 +942,8 @@ class MainWindow(QMainWindow):
             f"消息数量：{result.message_count}",
             f"文件数量：{result.file_count}",
         ]
-        if result.messages_csv:
-            lines.append(f"消息 CSV：{result.messages_csv}")
-        if result.messages_json:
-            lines.append(f"消息 JSON：{result.messages_json}")
+        if result.messages_xlsx:
+            lines.append(f"聊天记录：{result.messages_xlsx}")
         if result.files_folder:
             lines.append(f"文件目录：{result.files_folder}")
         if result.warnings:
@@ -848,7 +959,7 @@ class MainWindow(QMainWindow):
             title=result.session_name,
             export_folder=result.export_folder,
             exported_count=result.message_count + result.file_count,
-            summary_path=result.summary_txt,
+            summary_path=None,
             detail_json=serialize_export_detail(
                 "chat",
                 request if isinstance(request, ChatExportRequest) else ChatExportRequest(session_name=result.session_name, target_folder=result.export_folder),
@@ -856,8 +967,7 @@ class MainWindow(QMainWindow):
                     "session_name": result.session_name,
                     "message_count": result.message_count,
                     "file_count": result.file_count,
-                    "messages_csv": result.messages_csv,
-                    "messages_json": result.messages_json,
+                    "messages_xlsx": result.messages_xlsx,
                     "files_folder": result.files_folder,
                     "warnings": result.warnings,
                 },
@@ -934,34 +1044,37 @@ class MainWindow(QMainWindow):
         if action == "collect_texts" and isinstance(result, RelayCollectionResult):
             self.relay_page.append_package_rows(result.rows)
             self.relay_page.refresh_package_summary(
-                result.warning or f"已采集 {len(result.rows)} 条文本内容，请勾选真正需要转发的内容。"
+                result.warning or f"已采集 {len(result.rows)} 条文字内容，请确认哪些需要发送。"
             )
-            self.status_bar.showMessage("上游文本采集完成。", 5000)
+            self.status_bar.showMessage("文字采集完成。", 5000)
             return
         if action == "collect_files" and isinstance(result, RelayCollectionResult):
             self.relay_page.append_package_rows(result.rows)
             self.relay_page.refresh_package_summary(
-                result.warning or f"已采集 {len(result.rows)} 个文件/图片，请确认是否都是最新版本。"
+                result.warning or f"已采集 {len(result.rows)} 个文件/图片，请确认是否都是本次要发送的版本。"
             )
-            self.status_bar.showMessage("上游文件采集完成。", 5000)
+            self.status_bar.showMessage("聊天文件采集完成。", 5000)
             return
         if action == "validate_routes" and isinstance(result, RelayValidationResult):
             summary = (
-                f"已验证 {result.checked_count} 条下游路由："
-                f"找到 {result.found_count} 条，未找到 {result.missing_count} 条。"
+                f"已验证 {result.checked_count} 个收件人："
+                f"可用 {result.found_count} 个，不可用 {result.missing_count} 个。"
             )
             self.relay_page.apply_validation_result(result.route_rows, summary)
-            self.status_bar.showMessage("下游验证完成。", 5000)
+            self._persist_execution_record(self._build_relay_validation_execution(result))
+            self.refresh_history()
+            self.status_bar.showMessage("收件人验证完成。", 5000)
             return
         if action == "send_package" and isinstance(result, RelaySendResult):
             lines = [
-                "测试发送已完成。" if result.test_only else "正式批量发送已完成。",
-                f"来源会话：{result.source_session or '未填写'}",
-                f"转发内容数：{result.item_count}",
+                "测试发送已完成。" if result.test_only else "批量发送已完成。",
+                f"发送内容数：{result.item_count}",
                 f"目标会话数：{result.target_count}",
                 f"成功目标：{result.success_count}",
                 f"失败目标：{result.failure_count}",
             ]
+            if result.source_session:
+                lines.insert(1, f"来源会话：{result.source_session}")
             if result.results:
                 lines.append("")
                 lines.append("结果明细：")
@@ -972,7 +1085,11 @@ class MainWindow(QMainWindow):
                         detail += f"；{row.error_message}"
                     lines.append(f"- {detail}")
             self.relay_page.apply_send_result("\n".join(lines))
-            self.status_bar.showMessage("测试发送完成。" if result.test_only else "正式发送完成。", 5000)
+            request = self.worker.request if isinstance(self.worker, RelayWorker) else None
+            relay_request = request if isinstance(request, RelaySendRequest) else None
+            self._persist_execution_record(self._build_relay_send_execution(result, relay_request))
+            self.refresh_history()
+            self.status_bar.showMessage("测试发送完成。" if result.test_only else "批量发送完成。", 5000)
             return
 
     def _handle_worker_failure(self, ui_error: UiError) -> None:
@@ -1012,6 +1129,7 @@ class MainWindow(QMainWindow):
                 str(result.row_index + 1),
                 result.session_name,
                 "成功" if result.success else "失败",
+                self._execution_row_preview(result),
                 result.error_code or "",
                 result.error_message or "",
             ]
@@ -1057,19 +1175,31 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "执行历史", "请先选中一条执行记录。")
             return
         execution = self.storage.get_execution(execution_id)
-        failed_rows = failed_rows_from_execution(execution)
-        if not failed_rows:
-            QMessageBox.information(self, "执行历史", "该执行记录没有失败项。")
-            return
         if execution.task_type is TaskType.MESSAGE:
+            failed_rows = failed_rows_from_execution(execution)
+            if not failed_rows:
+                QMessageBox.information(self, "执行历史", "该执行记录没有失败项。")
+                return
             rows = [MessageBatchRow.from_mapping(row) for row in failed_rows]
             self.message_page.load_rows(rows, source_execution_id=execution.id)
-            self.nav.setCurrentRow(1)
-        else:
+            self._open_page(self.message_page)
+            self.status_bar.showMessage("已基于失败项重建任务，请确认后重新执行。", 6000)
+            return
+        if execution.task_type is TaskType.FILE:
+            failed_rows = failed_rows_from_execution(execution)
+            if not failed_rows:
+                QMessageBox.information(self, "执行历史", "该执行记录没有失败项。")
+                return
             rows = [FileBatchRow.from_mapping(row) for row in failed_rows]
             self.file_page.load_rows(rows, source_execution_id=execution.id)
-            self.nav.setCurrentRow(2)
-        self.status_bar.showMessage("已基于失败项重建任务，请确认后重新执行。", 6000)
+            self._open_page(self.file_page)
+            self.status_bar.showMessage("已基于失败项重建任务，请确认后重新执行。", 6000)
+            return
+        if execution.task_type in {TaskType.RELAY_SEND, TaskType.RELAY_TEST_SEND}:
+            if self._load_relay_failures_from_execution(execution):
+                self.status_bar.showMessage("已把失败收件人回填到发送工作台，请确认后重试。", 6000)
+            return
+        QMessageBox.information(self, "执行历史", "这类记录暂不支持回填。")
 
     def clear_history(self) -> None:
         answer = QMessageBox.question(
@@ -1128,7 +1258,7 @@ class MainWindow(QMainWindow):
             filtered.append(record)
         for row_index, record in enumerate(filtered):
             table.insertRow(row_index)
-            values = [str(record.id), record.export_kind, record.title, str(record.exported_count), record.created_at or ""]
+            values = [str(record.id), export_type_label(record.export_kind), record.title, str(record.exported_count), record.created_at or ""]
             for column_index, value in enumerate(values):
                 table.setItem(row_index, column_index, QTableWidgetItem(value))
         table.resizeColumnsToContents()
@@ -1186,16 +1316,16 @@ class MainWindow(QMainWindow):
         kind, request = payload
         if kind == "chat":
             self.export_page.apply_single_request(request)
-            self.nav.setCurrentRow(3)
+            self._open_chat_export_page()
             self.start_export(request)
             return
         if kind == "chat_batch":
             self.export_page.apply_batch_request(request)
-            self.nav.setCurrentRow(3)
+            self._open_chat_export_page()
             self.start_batch_export(request)
             return
         self.resource_page.apply_request(request)
-        self.nav.setCurrentRow(4)
+        self._open_resource_export_page()
         self.start_resource_export(request)
 
     def retry_failed_export_sessions(self) -> None:
@@ -1213,7 +1343,7 @@ class MainWindow(QMainWindow):
             return
         _, request = payload
         self.export_page.apply_batch_request(request)
-        self.nav.setCurrentRow(3)
+        self._open_chat_export_page()
         self.start_batch_export(request)
 
     def open_selected_export_folder(self) -> None:
@@ -1283,8 +1413,134 @@ class MainWindow(QMainWindow):
             return
         execution = self.storage.get_execution(selected_execution)
         has_failures = execution.failure_count > 0
-        self.history_page.export_failed_button.setEnabled(has_failures)
-        self.history_page.retry_button.setEnabled(has_failures)
+        exportable = execution.task_type in {TaskType.MESSAGE, TaskType.FILE}
+        retryable = execution.task_type in {TaskType.MESSAGE, TaskType.FILE, TaskType.RELAY_SEND, TaskType.RELAY_TEST_SEND}
+        self.history_page.export_failed_button.setEnabled(has_failures and exportable)
+        self.history_page.retry_button.setEnabled(has_failures and retryable)
+
+    @staticmethod
+    def _execution_row_preview(result: ExecutionRowResult) -> str:
+        payload = result.payload
+        if not payload:
+            return ""
+        if "message" in payload:
+            return str(payload.get("message", "")).strip()
+        if "file_paths" in payload:
+            file_paths = str(payload.get("file_paths", "")).strip()
+            return file_paths[:120]
+        if "validation_status" in payload:
+            return f"{payload.get('validation_status', '')} {payload.get('validation_message', '')}".strip()
+        package_preview = payload.get("package_preview")
+        if isinstance(package_preview, list) and package_preview:
+            item_type_labels = {"text": "文本", "file": "文件", "image": "图片"}
+            labels = []
+            for item in package_preview[:3]:
+                if not isinstance(item, dict):
+                    continue
+                item_type = str(item.get("item_type", "") or "").strip()
+                content = str(item.get("content", "") or "").strip()
+                item_type = item_type_labels.get(item_type, item_type)
+                labels.append(f"{item_type}:{content}" if item_type else content)
+            text = "；".join(label for label in labels if label)
+            if len(package_preview) > 3:
+                text += "；..."
+            return text
+        if "target_session" in payload:
+            return f"已发 {payload.get('sent_count', 0)} 条"
+        return ""
+
+    def _persist_execution_record(self, record: ExecutionRecord) -> ExecutionRecord:
+        saved = self.storage.save_execution(record)
+        for row in saved.rows:
+            if not row.success:
+                self.logger.error(
+                    "execution-row-failed task_type=%s row_index=%s session=%s error_code=%s error_message=%s raw_error=%s",
+                    saved.task_type.value,
+                    row.row_index,
+                    row.session_name,
+                    row.error_code,
+                    row.error_message,
+                    row.raw_error,
+                )
+        return saved
+
+    @staticmethod
+    def _build_relay_validation_execution(result: RelayValidationResult) -> ExecutionRecord:
+        rows = [row for row in result.route_rows if row.downstream_session.strip()]
+        record = ExecutionRecord.new(task_type=TaskType.RELAY_VALIDATE, row_count=len(rows))
+        for row_index, row in enumerate(rows):
+            success = row.validation_status == "已找到"
+            if success:
+                record.success_count += 1
+            else:
+                record.failure_count += 1
+            record.rows.append(
+                ExecutionRowResult(
+                    row_index=row_index,
+                    session_name=row.downstream_session,
+                    success=success,
+                    error_code=None if success else "SESSION_VALIDATION_FAILED",
+                    error_message="" if success else row.validation_message,
+                    raw_error="" if success else row.validation_message,
+                    row_payload_json=json.dumps(
+                        {
+                            "source_session": result.source_session,
+                            "downstream_session": row.downstream_session,
+                            "validation_status": row.validation_status,
+                            "validation_message": row.validation_message,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            )
+        record.status = "completed"
+        record.finished_at = record.started_at
+        return record
+
+    @staticmethod
+    def _build_relay_send_execution(result: RelaySendResult, request: RelaySendRequest | None) -> ExecutionRecord:
+        record = ExecutionRecord.new(
+            task_type=TaskType.RELAY_TEST_SEND if result.test_only else TaskType.RELAY_SEND,
+            row_count=len(result.results),
+        )
+        package_preview = []
+        if request is not None:
+            package_preview = [
+                {
+                    "sequence": item.sequence,
+                    "item_type": item.item_type.value,
+                    "content": item.content,
+                    "file_path": item.file_path,
+                }
+                for item in sorted(request.package_rows, key=lambda item: item.sequence)
+            ]
+        record.success_count = result.success_count
+        record.failure_count = result.failure_count
+        for row_index, row in enumerate(result.results):
+            record.rows.append(
+                ExecutionRowResult(
+                    row_index=row_index,
+                    session_name=row.target_session,
+                    success=row.success,
+                    error_code=None if row.success else "RELAY_SEND_FAILED",
+                    error_message="" if row.success else row.error_message,
+                    raw_error="" if row.success else row.error_message,
+                    row_payload_json=json.dumps(
+                        {
+                            "source_session": result.source_session,
+                            "target_session": row.target_session,
+                            "sent_count": row.sent_count,
+                            "item_count": result.item_count,
+                            "test_only": result.test_only,
+                            "package_preview": package_preview,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            )
+        record.status = "completed"
+        record.finished_at = record.started_at
+        return record
 
     def _show_guidance_dialog(self, title: str, message: str, suggestion: str) -> None:
         dialog = QDialog(self)
@@ -1338,6 +1594,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "导出失败项", "请先选中一条执行记录。")
             return
         execution = self.storage.get_execution(execution_id)
+        if execution.task_type not in {TaskType.MESSAGE, TaskType.FILE}:
+            QMessageBox.information(self, "导出失败项", "这类记录暂不支持按批量消息/文件格式导出失败项。")
+            return
         failed_rows = failed_rows_from_execution(execution)
         if not failed_rows:
             QMessageBox.information(self, "导出失败项", "该执行记录没有失败项可导出。")
@@ -1355,3 +1614,27 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("失败项已导出，可用于二次处理。", 5000)
         except Exception as exc:
             QMessageBox.critical(self, "导出失败项", str(exc))
+
+    def _load_relay_failures_from_execution(self, execution: ExecutionRecord) -> bool:
+        failed_results = [row for row in execution.rows if not row.success and row.session_name.strip()]
+        if not failed_results:
+            QMessageBox.information(self, "执行历史", "该执行记录没有失败项。")
+            return False
+        first_payload = next((row.payload for row in execution.rows if row.payload), {})
+        package_preview = first_payload.get("package_preview", []) if isinstance(first_payload, dict) else []
+        package_rows = [RelayPackageRow.from_mapping(item) for item in package_preview if isinstance(item, dict)]
+        if not package_rows:
+            QMessageBox.information(self, "执行历史", "这条记录缺少发送内容，暂时无法自动回填。")
+            return False
+        route_rows = [RelayRouteRow(downstream_session=row.session_name) for row in failed_results]
+        source_session = str(first_payload.get("source_session", "") or "").strip() if isinstance(first_payload, dict) else ""
+        self.relay_page.load_template_payload(
+            {
+                "source_session": source_session,
+                "package_name": "",
+                "package_rows": package_rows,
+                "route_rows": route_rows,
+            }
+        )
+        self._open_page(self.relay_page)
+        return True
