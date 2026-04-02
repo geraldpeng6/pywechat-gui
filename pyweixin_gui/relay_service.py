@@ -90,8 +90,8 @@ class RelayService:
             if not self._looks_like_chat_file_parse_error(exc):
                 raise
             warning = (
-                "当前未能从微信聊天文件列表识别出结果数量。"
-                "这通常表示该会话暂无可导出的聊天文件，或当前微信界面文案与 pyweixin 的解析逻辑不匹配。"
+                "这次没有整理到聊天文件。"
+                "该会话可能暂时没有可保存的文件，或当前页面未能成功读取到文件列表。"
             )
         files = sorted([path for path in cache_dir.iterdir() if path.is_file()], key=lambda item: item.stat().st_mtime, reverse=True)
         rows = []

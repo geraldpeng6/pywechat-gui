@@ -176,7 +176,6 @@ def _request_lines(export_kind: str, request: dict) -> list[tuple[str, str]]:
             ("导出目录", str(request.get("target_folder", ""))),
             ("导出文本消息", "是" if request.get("export_messages") else "否"),
             ("导出聊天文件", "是" if request.get("export_files") else "否"),
-            ("尝试导出图片/视频", "是" if request.get("export_images") else "否"),
             ("消息条数", str(request.get("message_limit", ""))),
             ("文件数量", str(request.get("file_limit", ""))),
         ]
@@ -188,7 +187,6 @@ def _request_lines(export_kind: str, request: dict) -> list[tuple[str, str]]:
             ("导出目录", str(request.get("target_folder", ""))),
             ("导出文本消息", "是" if request.get("export_messages") else "否"),
             ("导出聊天文件", "是" if request.get("export_files") else "否"),
-            ("尝试导出图片/视频", "是" if request.get("export_images") else "否"),
             ("消息条数", str(request.get("message_limit", ""))),
             ("文件数量", str(request.get("file_limit", ""))),
         ]

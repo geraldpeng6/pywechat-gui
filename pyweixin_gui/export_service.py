@@ -88,12 +88,9 @@ class ChatExportService:
                 if not self._looks_like_chat_file_parse_error(exc):
                     raise
                 warnings.append(
-                    "聊天文件导出已跳过：当前未能从微信文件列表识别出结果数量。"
-                    "这通常表示该会话暂无可导出的聊天文件，或当前微信界面文案与 pyweixin 的解析逻辑不匹配。"
+                    "聊天文件未整理到结果中。"
+                    "该会话可能暂时没有可保存的聊天文件，或当前页面未能成功读取到文件列表。"
                 )
-
-        if request.export_images:
-            warnings.append("当前库未提供稳定的历史图片/视频一键导出能力，本次已跳过图片与视频。")
 
         result.warnings = warnings
         summary_json = export_folder / "export-summary.json"

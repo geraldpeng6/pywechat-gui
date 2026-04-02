@@ -34,7 +34,7 @@ class ExportServiceTestCase(unittest.TestCase):
                 target_folder=tempdir,
                 export_messages=True,
                 export_files=True,
-                export_images=True,
+                export_images=False,
                 message_limit=10,
                 file_limit=10,
             )
@@ -49,7 +49,7 @@ class ExportServiceTestCase(unittest.TestCase):
             self.assertEqual(result.file_count, 1)
             summary = json.loads(Path(result.summary_json).read_text(encoding="utf-8"))
             self.assertEqual(summary["session_name"], "测试群")
-            self.assertTrue(summary["warnings"])
+            self.assertEqual(summary["warnings"], [])
 
     def test_export_bundle_keeps_messages_when_chat_file_parse_fails(self):
         service = ChatExportService(ParseFailureAdapter())
@@ -68,7 +68,7 @@ class ExportServiceTestCase(unittest.TestCase):
             self.assertEqual(result.file_count, 0)
             self.assertTrue(result.messages_csv)
             self.assertTrue(result.files_folder)
-            self.assertTrue(any("聊天文件导出已跳过" in warning for warning in result.warnings))
+            self.assertTrue(any("聊天文件未整理到结果中" in warning for warning in result.warnings))
 
 
 if __name__ == "__main__":

@@ -796,7 +796,7 @@ class ExportPage(QWidget):
         subtitle.setWordWrap(True)
         card.body_layout.addWidget(subtitle)
         helper = QLabel(
-            "当前基于库原生能力稳定支持：文本消息、聊天文件。历史图片/视频一键导出能力目前仍有限，界面会明确提示。"
+            "可导出聊天文字记录和聊天文件。若相关文件尚未保存在本机，请先在微信里打开或下载后再试。"
         )
         helper.setProperty("role", "warn")
         helper.setWordWrap(True)
@@ -823,8 +823,6 @@ class ExportPage(QWidget):
         self.export_messages_checkbox.setChecked(True)
         self.export_files_checkbox = QCheckBox("导出聊天文件")
         self.export_files_checkbox.setChecked(True)
-        self.export_images_checkbox = QCheckBox("尝试导出图片/视频（当前库支持有限）")
-        self.export_images_checkbox.setChecked(False)
 
         self.message_limit_spin = QSpinBox()
         self.message_limit_spin.setRange(1, 5000)
@@ -856,7 +854,6 @@ class ExportPage(QWidget):
         scope_layout.setSpacing(18)
         scope_layout.addWidget(self.export_messages_checkbox)
         scope_layout.addWidget(self.export_files_checkbox)
-        scope_layout.addWidget(self.export_images_checkbox)
         scope_layout.addStretch(1)
 
         form.addRow("会话名称", self.session_name_input)
@@ -909,7 +906,7 @@ class ExportPage(QWidget):
             target_folder=self.target_folder_input.text().strip(),
             export_messages=self.export_messages_checkbox.isChecked(),
             export_files=self.export_files_checkbox.isChecked(),
-            export_images=self.export_images_checkbox.isChecked(),
+            export_images=False,
             message_limit=self.message_limit_spin.value(),
             file_limit=self.file_limit_spin.value(),
         )
@@ -931,7 +928,7 @@ class ExportPage(QWidget):
             target_folder=self.target_folder_input.text().strip(),
             export_messages=self.export_messages_checkbox.isChecked(),
             export_files=self.export_files_checkbox.isChecked(),
-            export_images=self.export_images_checkbox.isChecked(),
+            export_images=False,
             message_limit=self.message_limit_spin.value(),
             file_limit=self.file_limit_spin.value(),
         )
@@ -972,7 +969,6 @@ class ExportPage(QWidget):
         self.target_folder_input.setText(request.target_folder)
         self.export_messages_checkbox.setChecked(request.export_messages)
         self.export_files_checkbox.setChecked(request.export_files)
-        self.export_images_checkbox.setChecked(request.export_images)
         self.message_limit_spin.setValue(request.message_limit)
         self.file_limit_spin.setValue(request.file_limit)
         self.summary_label.setText("已回填上次导出参数。确认无误后可重新执行。")
@@ -982,7 +978,6 @@ class ExportPage(QWidget):
         self.target_folder_input.setText(request.target_folder)
         self.export_messages_checkbox.setChecked(request.export_messages)
         self.export_files_checkbox.setChecked(request.export_files)
-        self.export_images_checkbox.setChecked(request.export_images)
         self.message_limit_spin.setValue(request.message_limit)
         self.file_limit_spin.setValue(request.file_limit)
         self.summary_label.setText("已回填批量导出参数。确认无误后可重新执行。")
@@ -1000,7 +995,6 @@ class ExportPage(QWidget):
             self.target_folder_input,
             self.export_messages_checkbox,
             self.export_files_checkbox,
-            self.export_images_checkbox,
             self.message_limit_spin,
             self.file_limit_spin,
         ]:
@@ -1020,7 +1014,7 @@ class ResourceToolsPage(QWidget):
         subtitle.setProperty("role", "pageSubtitle")
         subtitle.setWordWrap(True)
         card.body_layout.addWidget(subtitle)
-        helper = QLabel("这些能力依赖微信本地已存在的文件。若聊天文件或视频从未下载过，本工具无法补出云端内容。")
+        helper = QLabel("这里整理的是已经保存在本机的内容。若微信里尚未下载到本地，导出结果可能为空。")
         helper.setProperty("role", "warn")
         helper.setWordWrap(True)
         card.body_layout.addWidget(helper)
@@ -1379,7 +1373,7 @@ class RelayWorkbenchPage(QWidget):
         intro.setProperty("role", "pageSubtitle")
         intro.setWordWrap(True)
         source_card.body_layout.addWidget(intro)
-        helper = QLabel("当前基于 pyweixin 已稳定支持：文本消息采集、聊天文件采集、本地文件/图片补充、下游会话验证、测试发送到文件传输助手。")
+        helper = QLabel("先整理这次真正要转发的内容，再先发一遍测试消息确认无误，最后正式批量发送。")
         helper.setProperty("role", "hint")
         helper.setWordWrap(True)
         source_card.body_layout.addWidget(helper)
