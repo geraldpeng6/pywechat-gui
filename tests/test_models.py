@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from pyweixin_gui.models import FileBatchRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectMode, RelayCollectTextRequest, RelayItemType, RelayPackageRow, RelayRecentRange, relay_template_from_json, relay_template_to_json
+from pyweixin_gui.models import FileBatchRow, MessageBatchRow, RelayCollectFilesRequest, RelayCollectMediaRequest, RelayCollectMode, RelayCollectTextRequest, RelayItemType, RelayPackageRow, RelayRecentRange, relay_template_from_json, relay_template_to_json
 
 
 class ModelsTestCase(unittest.TestCase):
@@ -79,6 +79,15 @@ class ModelsTestCase(unittest.TestCase):
             recent_range="invalid",
         )
         self.assertIn("recent_range", request.validate())
+
+    def test_collect_media_request_accepts_period_mode(self):
+        request = RelayCollectMediaRequest(
+            source_session="上游A",
+            media_limit=10,
+            collect_mode=RelayCollectMode.PERIOD,
+            recent_range=RelayRecentRange.WEEK,
+        )
+        self.assertEqual(request.validate(), {})
 
     def test_collect_request_sender_name_list(self):
         request = RelayCollectTextRequest(source_session="上游A", sender_names="张三| 李四 |")

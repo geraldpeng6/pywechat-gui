@@ -466,11 +466,11 @@ class BatchTableWidget(QTableWidget):
         for row in selected_rows:
             self.item(row, column_index).setText(joined)
 
-    def import_rows(self) -> None:
+    def import_rows(self, preferred_encoding: str = "auto") -> None:
         path, _ = QFileDialog.getOpenFileName(self, "导入表格", "", "Excel/CSV (*.xlsx *.csv)")
         if not path:
             return
-        rows = load_rows(self.task_type, path)
+        rows = load_rows(self.task_type, path, preferred_encoding=preferred_encoding)
         self.load_rows(rows)
 
     def export_rows(self, template_only: bool = False) -> None:
@@ -813,6 +813,7 @@ class BatchPage(QWidget):
     def __init__(self, task_type: TaskType, title: str, parent: QWidget | None = None):
         super().__init__(parent)
         self.task_type = task_type
+        self.import_encoding = "auto"
         self.pending_source_execution_id: int | None = None
         self._buttons: dict[str, QPushButton] = {}
         layout = QVBoxLayout(self)
@@ -968,7 +969,7 @@ class BatchPage(QWidget):
 
     def _import_rows(self) -> None:
         try:
-            self.table.import_rows()
+            self.table.import_rows(preferred_encoding=self.import_encoding)
             self._update_summary(f"导入完成，共 {self.table.rowCount()} 行。建议先点“校验”。")
         except Exception as exc:
             QMessageBox.critical(self, "导入失败", str(exc))
@@ -1042,6 +1043,9 @@ class BatchPage(QWidget):
     def _update_summary(self, text: str) -> None:
         self.summary_label.setText(text)
 
+    def set_import_encoding(self, import_encoding: str) -> None:
+        self.import_encoding = str(import_encoding or "auto")
+
     def set_running_state(self, is_running: bool) -> None:
         for name, button in self._buttons.items():
             if name == "停止":
@@ -1062,17 +1066,18 @@ class ExportPage(QWidget):
         from PySide6.QtWidgets import QCheckBox, QFormLayout, QSpinBox
 
         super().__init__(parent)
+        self.import_encoding = "auto"
         self._running = False
         self._action_cooldowns: dict[str, float] = {}
         self._buttons: dict[str, QPushButton] = {}
         layout = QVBoxLayout(self)
         card = CardFrame("会话导出", hero=True)
-        subtitle = QLabel("一键导出指定好友或群聊的文本记录和聊天文件，适合做留档、交接和二次处理。")
+        subtitle = QLabel("一键导出指定好友或群聊的文本记录、聊天文件和图片/视频，适合做留档、交接和二次处理。")
         subtitle.setProperty("role", "pageSubtitle")
         subtitle.setWordWrap(True)
         card.body_layout.addWidget(subtitle)
         helper = QLabel(
-            "可导出聊天文字记录和聊天文件。若相关文件尚未保存在本机，请先在微信里打开或下载后再试。"
+            "可导出聊天文字记录、聊天文件和图片/视频。若相关素材尚未保存在本机，请先在微信里打开或下载后再试。"
         )
         helper.setProperty("role", "warn")
         helper.setWordWrap(True)
@@ -1098,6 +1103,7 @@ class ExportPage(QWidget):
         self.export_messages_checkbox.setChecked(True)
         self.export_files_checkbox = QCheckBox("导出聊天文件")
         self.export_files_checkbox.setChecked(True)
+        self.export_images_checkbox = QCheckBox("导出图片/视频")
 
         self.message_limit_spin = QSpinBox()
         self.message_limit_spin.setRange(1, 5000)
@@ -1110,11 +1116,11 @@ class ExportPage(QWidget):
 
         message_limit_label = QLabel("消息条数")
         message_limit_label.setProperty("role", "muted")
-        file_limit_label = QLabel("文件数量")
+        file_limit_label = QLabel("文件/媒体数量")
         file_limit_label.setProperty("role", "muted")
         count_row = _flow_container(message_limit_label, self.message_limit_spin, file_limit_label, self.file_limit_spin, h_spacing=12)
 
-        scope_row = _flow_container(self.export_messages_checkbox, self.export_files_checkbox, h_spacing=16)
+        scope_row = _flow_container(self.export_messages_checkbox, self.export_files_checkbox, self.export_images_checkbox, h_spacing=16)
 
         form.addRow("会话名称", self.session_name_input)
         form.addRow("批量会话", self.session_names_input)
@@ -1166,7 +1172,7 @@ class ExportPage(QWidget):
             target_folder=self.target_folder_input.text().strip(),
             export_messages=self.export_messages_checkbox.isChecked(),
             export_files=self.export_files_checkbox.isChecked(),
-            export_images=False,
+            export_images=self.export_images_checkbox.isChecked(),
             message_limit=self.message_limit_spin.value(),
             file_limit=self.file_limit_spin.value(),
         )
@@ -1197,7 +1203,7 @@ class ExportPage(QWidget):
             target_folder=self.target_folder_input.text().strip(),
             export_messages=self.export_messages_checkbox.isChecked(),
             export_files=self.export_files_checkbox.isChecked(),
-            export_images=False,
+            export_images=self.export_images_checkbox.isChecked(),
             message_limit=self.message_limit_spin.value(),
             file_limit=self.file_limit_spin.value(),
         )
@@ -1232,7 +1238,7 @@ class ExportPage(QWidget):
         if not path:
             return
         try:
-            names = load_session_names(path)
+            names = load_session_names(path, preferred_encoding=self.import_encoding)
         except Exception as exc:
             QMessageBox.critical(self, "导入会话名单失败", str(exc))
             return
@@ -1247,6 +1253,7 @@ class ExportPage(QWidget):
         self.target_folder_input.setText(request.target_folder)
         self.export_messages_checkbox.setChecked(request.export_messages)
         self.export_files_checkbox.setChecked(request.export_files)
+        self.export_images_checkbox.setChecked(request.export_images)
         self.message_limit_spin.setValue(request.message_limit)
         self.file_limit_spin.setValue(request.file_limit)
         self.summary_label.setText("已回填上次导出参数。确认无误后可重新执行。")
@@ -1256,9 +1263,13 @@ class ExportPage(QWidget):
         self.target_folder_input.setText(request.target_folder)
         self.export_messages_checkbox.setChecked(request.export_messages)
         self.export_files_checkbox.setChecked(request.export_files)
+        self.export_images_checkbox.setChecked(request.export_images)
         self.message_limit_spin.setValue(request.message_limit)
         self.file_limit_spin.setValue(request.file_limit)
         self.summary_label.setText("已回填批量导出参数。确认无误后可重新执行。")
+
+    def set_import_encoding(self, import_encoding: str) -> None:
+        self.import_encoding = str(import_encoding or "auto")
 
     def set_running_state(self, is_running: bool) -> None:
         self._running = is_running
@@ -1274,6 +1285,7 @@ class ExportPage(QWidget):
             self.target_folder_input,
             self.export_messages_checkbox,
             self.export_files_checkbox,
+            self.export_images_checkbox,
             self.message_limit_spin,
             self.file_limit_spin,
         ]:
@@ -1286,6 +1298,7 @@ class ResourceToolsPage(QWidget):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self.import_encoding = "auto"
         self._running = False
         self._action_cooldowns: dict[str, float] = {}
         self._buttons: dict[str, QPushButton] = {}
@@ -1684,6 +1697,7 @@ class RelayWorkbenchPage(QWidget):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self.import_encoding = "auto"
         self._running = False
         self._action_cooldowns: dict[str, float] = {}
         layout = QVBoxLayout(self)
@@ -1944,12 +1958,11 @@ class RelayWorkbenchPage(QWidget):
         if self.collect_sender_chips.values():
             QMessageBox.information(self, "采集图片/视频", "图片/视频当前还不支持按群成员筛选，请先清空群成员筛选后再采集。")
             return
-        if self.current_collect_mode() is RelayCollectMode.PERIOD:
-            QMessageBox.information(self, "采集图片/视频", "图片/视频当前先按数量采集。时间段采集会在后续版本继续补强。")
-            return
         request = RelayCollectMediaRequest(
             source_session=self.source_session_input.text().strip(),
             media_limit=self.file_limit_spin.value(),
+            collect_mode=self.current_collect_mode(),
+            recent_range=self.current_recent_range(),
         )
         errors = request.validate()
         if errors:
@@ -2269,7 +2282,7 @@ class RelayWorkbenchPage(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "导入收件人表格", "", "Excel/CSV (*.xlsx *.csv)")
         if not path:
             return
-        rows = load_route_rows(path)
+        rows = load_route_rows(path, preferred_encoding=self.import_encoding)
         self.set_route_rows(rows, f"已导入 {len(rows)} 个收件人。")
 
     def export_route_template(self) -> None:
@@ -2342,6 +2355,25 @@ class RelayWorkbenchPage(QWidget):
 
     def apply_send_result(self, text: str) -> None:
         self.result_text.setPlainText(text)
+
+    def focus_package_sequence(self, sequence: int | None, message: str | None = None) -> bool:
+        if message:
+            self.result_text.setPlainText(message)
+        if sequence is None or sequence <= 0:
+            return False
+        sequence_column = next(index for index, (key, _, _) in enumerate(self.PACKAGE_COLUMNS) if key == "sequence")
+        content_column = next(index for index, (key, _, _) in enumerate(self.PACKAGE_COLUMNS) if key == "content")
+        for row_index in range(self.package_table.rowCount()):
+            item = self.package_table.item(row_index, sequence_column)
+            if item is None or item.text().strip() != str(sequence):
+                continue
+            focus_item = self.package_table.item(row_index, content_column) or item
+            self.package_table.clearSelection()
+            self.package_table.selectRow(row_index)
+            self.package_table.setCurrentItem(focus_item)
+            self.package_table.scrollToItem(focus_item)
+            return True
+        return False
 
     def refresh_package_summary(self, override: str | None = None) -> None:
         if override:
@@ -2439,6 +2471,9 @@ class RelayWorkbenchPage(QWidget):
                 self.runtime_status_label.setText("任务正在执行，请稍候。")
         else:
             self.runtime_status_label.setText("当前没有正在执行的任务。")
+
+    def set_import_encoding(self, import_encoding: str) -> None:
+        self.import_encoding = str(import_encoding or "auto")
 
     def _set_table_row(self, table: QTableWidget, row_index: int, columns: list[tuple[str, str, str]], values: dict[str, Any]) -> None:
         for column_index, (key, _, kind) in enumerate(columns):
@@ -2647,7 +2682,15 @@ class ExportHistoryPage(QWidget):
         card = CardFrame("导出历史")
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索导出类型、标题或目录")
-        card.body_layout.addWidget(self.search_input)
+        self.kind_filter = QComboBox()
+        self.kind_filter.addItem("全部类型", "all")
+        self.kind_filter.addItem("会话导出", "chat")
+        self.kind_filter.addItem("批量会话导出", "chat_batch")
+        self.kind_filter.addItem("发送文件夹", "relay_package")
+        self.kind_filter.addItem("最近聊天文件", "recent_files")
+        self.kind_filter.addItem("微信聊天文件", "wxfiles")
+        self.kind_filter.addItem("微信聊天视频", "videos")
+        card.body_layout.addWidget(_flow_container(self.search_input, self.kind_filter, h_spacing=12))
         self.open_folder_button = QPushButton("打开目录")
         self.open_folder_button.setProperty("variant", "secondary")
         self.open_summary_button = QPushButton("打开摘要")
@@ -2748,7 +2791,14 @@ class HistoryPage(QWidget):
         history_card.body_layout.addWidget(helper)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索会话、状态或任务类型，例如：失败、客户A、文件")
-        history_card.body_layout.addWidget(self.search_input)
+        self.task_type_filter = QComboBox()
+        self.task_type_filter.addItem("全部任务", "all")
+        self.task_type_filter.addItem("批量消息", "message")
+        self.task_type_filter.addItem("批量文件", "file")
+        self.task_type_filter.addItem("收件人验证", "relay_validate")
+        self.task_type_filter.addItem("发送测试", "relay_test_send")
+        self.task_type_filter.addItem("正式发送", "relay_send")
+        history_card.body_layout.addWidget(_flow_container(self.search_input, self.task_type_filter, h_spacing=12))
         self.total_runs_label = self._create_stat_card("总记录", "0")
         self.success_runs_label = self._create_stat_card("全成功", "0")
         self.failed_runs_label = self._create_stat_card("含失败", "0")
@@ -2853,6 +2903,13 @@ class SettingsPage(QWidget):
         self.theme = QComboBox()
         self.theme.addItem("浅色", "light")
         _set_compact_width(self.theme, 150)
+        self.history_retention = QComboBox()
+        self.history_retention.addItem("永久保留", "forever")
+        self.history_retention.addItem("保留 180 天", "180d")
+        self.history_retention.addItem("保留 90 天", "90d")
+        self.history_retention.addItem("保留 30 天", "30d")
+        self.history_retention.addItem("保留 7 天", "7d")
+        _set_compact_width(self.history_retention, 160)
 
         behavior_row = _flow_container(self.is_maximize, self.close_weixin, self.clear, h_spacing=16)
 
@@ -2873,11 +2930,15 @@ class SettingsPage(QWidget):
         theme_label = QLabel("主题")
         theme_label.setProperty("role", "muted")
         misc_row = _flow_container(encoding_label, self.import_encoding, theme_label, self.theme, h_spacing=12)
+        retention_label = QLabel("历史保留")
+        retention_label.setProperty("role", "muted")
+        history_row = _flow_container(retention_label, self.history_retention, h_spacing=12)
 
         form.addRow("执行行为", behavior_row)
         form.addRow("发送设置", runtime_row)
         form.addRow("窗口大小", size_row)
         form.addRow("其他设置", misc_row)
+        form.addRow("记录管理", history_row)
         card.body_layout.addLayout(form)
         self.save_button = QPushButton("保存设置")
         card.body_layout.addWidget(self.save_button)

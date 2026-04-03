@@ -19,6 +19,9 @@ def _sanitize_filename(value: str) -> str:
     return cleaned or "会话导出"
 
 
+MEDIA_FOLDER_NAME = "聊天图片与视频"
+
+
 class ChatExportService:
     def __init__(self, adapter: PyWeixinAdapter):
         self.adapter = adapter
@@ -86,6 +89,22 @@ class ChatExportService:
                     "聊天文件未整理到结果中。"
                     "该会话可能暂时没有可保存的聊天文件，或当前页面未能成功读取到文件列表。"
                 )
+
+        self._check_stop(should_stop)
+
+        if request.export_images:
+            if on_progress:
+                on_progress("正在导出聊天图片/视频...")
+            media_folder = export_folder / MEDIA_FOLDER_NAME
+            media_folder.mkdir(parents=True, exist_ok=True)
+            result.media_folder = str(media_folder)
+            exported_media = self.adapter.save_chat_media(
+                session_name=request.session_name,
+                number=request.file_limit,
+                target_folder=str(media_folder),
+                options=runtime_options,
+            )
+            result.media_count = len([path for path in exported_media if Path(path).is_file()])
 
         result.warnings = warnings
         return result
@@ -160,11 +179,14 @@ class ChatExportService:
             f"导出目录：{result.export_folder}",
             f"消息数量：{result.message_count}",
             f"文件数量：{result.file_count}",
+            f"图片/视频数量：{result.media_count}",
         ]
         if result.messages_xlsx:
             lines.append(f"聊天记录：{result.messages_xlsx}")
         if result.files_folder:
             lines.append(f"文件目录：{result.files_folder}")
+        if result.media_folder:
+            lines.append(f"图片/视频目录：{result.media_folder}")
         if result.warnings:
             lines.append("注意事项：")
             lines.extend(f"- {warning}" for warning in result.warnings)

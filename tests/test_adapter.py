@@ -11,6 +11,38 @@ from pyweixin_gui.models import RelayRecentRange, RuntimeOptions
 
 
 class AdapterTestCase(unittest.TestCase):
+    def test_count_recent_media_visit_limit_stops_before_out_of_range_items(self):
+        class FakeText:
+            def __init__(self, text):
+                self._text = text
+
+            def window_text(self):
+                return self._text
+
+        class FakeMediaItem:
+            def __init__(self, label):
+                self._label = label
+
+            def window_text(self):
+                return ""
+
+            def descendants(self, control_type=None):
+                return [FakeText(self._label)]
+
+        items = [
+            FakeMediaItem("3月28日 09:00"),
+            FakeMediaItem("昨天 18:20"),
+            FakeMediaItem("今天 09:30"),
+            FakeMediaItem("今天 10:00"),
+        ]
+        count = PyWeixinAdapter._count_recent_media_visit_limit(
+            items,
+            recent_range=RelayRecentRange.TODAY,
+            now=datetime(2026, 4, 2, 10, 0),
+            save_limit=10,
+        )
+        self.assertEqual(count, 2)
+
     def test_non_windows_environment_has_clear_status(self):
         adapter = PyWeixinAdapter()
         with patch("platform.system", return_value="Darwin"), patch("platform.release", return_value="24.0"), patch(

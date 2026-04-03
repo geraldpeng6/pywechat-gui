@@ -13,12 +13,22 @@ class SettingsManagerTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             path = Path(tempdir) / "settings.json"
             manager = SettingsManager(path)
-            settings = AppSettings(is_maximize=True, search_pages=8, send_delay=0.5, theme="light", first_run_risk_ack=True)
+            settings = AppSettings(
+                is_maximize=True,
+                search_pages=8,
+                send_delay=0.5,
+                import_encoding="gbk",
+                theme="light",
+                history_retention="30d",
+                first_run_risk_ack=True,
+            )
             manager.save(settings)
             loaded = manager.load()
             self.assertTrue(loaded.is_maximize)
             self.assertEqual(loaded.search_pages, 8)
             self.assertEqual(loaded.send_delay, 0.5)
+            self.assertEqual(loaded.import_encoding, "gbk")
+            self.assertEqual(loaded.history_retention, "30d")
             self.assertTrue(loaded.first_run_risk_ack)
 
 

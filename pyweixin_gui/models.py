@@ -58,6 +58,20 @@ def split_pipe_values(value: str) -> list[str]:
     return [part.strip() for part in value.split("|") if part.strip()]
 
 
+HISTORY_RETENTION_OPTIONS = {
+    "forever": None,
+    "180d": 180,
+    "90d": 90,
+    "30d": 30,
+    "7d": 7,
+}
+
+
+def history_retention_days(value: str) -> int | None:
+    normalized = _normalize_text(value).lower() or "forever"
+    return HISTORY_RETENTION_OPTIONS.get(normalized)
+
+
 @dataclass
 class MessageBatchRow:
     enabled: bool = True
@@ -276,12 +290,12 @@ class ChatExportRequest:
             errors["session_name"] = "会话名称不能为空"
         if not self.target_folder.strip():
             errors["target_folder"] = "请选择导出文件夹"
-        if not self.export_messages and not self.export_files:
+        if not self.export_messages and not self.export_files and not self.export_images:
             errors["export_scope"] = "请至少勾选一种导出内容"
         if self.message_limit <= 0:
             errors["message_limit"] = "消息条数必须大于 0"
         if self.file_limit <= 0:
-            errors["file_limit"] = "文件数量必须大于 0"
+            errors["file_limit"] = "文件/媒体数量必须大于 0"
         return errors
 
 
@@ -301,12 +315,12 @@ class ChatBatchExportRequest:
             errors["session_names"] = "请至少填写一个会话名称"
         if not self.target_folder.strip():
             errors["target_folder"] = "请选择导出文件夹"
-        if not self.export_messages and not self.export_files:
+        if not self.export_messages and not self.export_files and not self.export_images:
             errors["export_scope"] = "请至少勾选一种导出内容"
         if self.message_limit <= 0:
             errors["message_limit"] = "消息条数必须大于 0"
         if self.file_limit <= 0:
-            errors["file_limit"] = "文件数量必须大于 0"
+            errors["file_limit"] = "文件/媒体数量必须大于 0"
         return errors
 
 
@@ -316,8 +330,10 @@ class ChatExportResult:
     export_folder: str
     message_count: int = 0
     file_count: int = 0
+    media_count: int = 0
     messages_xlsx: str | None = None
     files_folder: str | None = None
+    media_folder: str | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -621,6 +637,12 @@ class RelayCollectFilesRequest:
 class RelayCollectMediaRequest:
     source_session: str
     media_limit: int = 10
+    collect_mode: RelayCollectMode = RelayCollectMode.COUNT
+    recent_range: RelayRecentRange = RelayRecentRange.TODAY
+
+    def __post_init__(self) -> None:
+        self.collect_mode = coerce_relay_collect_mode(self.collect_mode)  # type: ignore[assignment]
+        self.recent_range = coerce_relay_recent_range(self.recent_range)  # type: ignore[assignment]
 
     def validate(self) -> dict[str, str]:
         errors: dict[str, str] = {}
@@ -628,6 +650,10 @@ class RelayCollectMediaRequest:
             errors["source_session"] = "请先填写来源会话"
         if self.media_limit <= 0:
             errors["media_limit"] = "图片/视频数量必须大于 0"
+        if not isinstance(self.collect_mode, RelayCollectMode):
+            errors["collect_mode"] = "请选择有效的采集方式"
+        if self.collect_mode is RelayCollectMode.PERIOD and not isinstance(self.recent_range, RelayRecentRange):
+            errors["recent_range"] = "请选择有效的时间范围"
         return errors
 
 
@@ -723,6 +749,9 @@ class RelayTargetResult:
     success: bool
     sent_count: int
     error_message: str = ""
+    failed_sequence: int | None = None
+    failed_item_type: str = ""
+    failed_item_preview: str = ""
 
 
 @dataclass

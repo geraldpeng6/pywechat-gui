@@ -4,12 +4,22 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pyweixin_gui.import_export import dump_route_rows, dump_rows, dump_table, load_route_rows, load_rows, load_session_names
 from pyweixin_gui.models import TaskType
 
 
 class ImportExportTestCase(unittest.TestCase):
+    def test_load_session_names_prefers_selected_encoding(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "sessions.csv"
+            path.write_bytes(b"placeholder")
+            with patch("pyweixin_gui.import_export._decode_text_file", return_value="session_name\n项目群\n") as decode:
+                names = load_session_names(path, preferred_encoding="gbk")
+            self.assertEqual(names, ["项目群"])
+            self.assertEqual(decode.call_args.args[1], ("gbk", "utf-8-sig"))
+
     def test_csv_roundtrip(self):
         with tempfile.TemporaryDirectory() as tempdir:
             path = Path(tempdir) / "messages.csv"

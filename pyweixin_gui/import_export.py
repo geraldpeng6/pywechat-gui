@@ -67,18 +67,28 @@ def headers_for(task_type: TaskType) -> list[str]:
     return MESSAGE_HEADERS if task_type is TaskType.MESSAGE else FILE_HEADERS
 
 
+def _encoding_candidates(preferred_encoding: str = "auto") -> tuple[str, ...]:
+    preferred = str(preferred_encoding or "auto").strip().lower()
+    default_encodings = ("utf-8-sig", "gbk")
+    if preferred in {"", "auto"}:
+        return default_encodings
+    ordered = [preferred]
+    ordered.extend(encoding for encoding in default_encodings if encoding != preferred)
+    return tuple(ordered)
+
+
 def _decode_text_file(path: Path, encodings: tuple[str, ...] = ("utf-8-sig", "gbk")) -> str:
     raw = path.read_bytes()
     for encoding in encodings:
         try:
             return raw.decode(encoding)
-        except UnicodeDecodeError:
+        except (LookupError, UnicodeDecodeError):
             continue
     raise UnicodeDecodeError("text", raw, 0, 1, "无法识别文件编码")
 
 
-def _load_csv_rows(path: Path) -> list[dict[str, Any]]:
-    text = _decode_text_file(path)
+def _load_csv_rows(path: Path, preferred_encoding: str = "auto") -> list[dict[str, Any]]:
+    text = _decode_text_file(path, _encoding_candidates(preferred_encoding))
     reader = csv.DictReader(text.splitlines())
     return [dict(row) for row in reader]
 
@@ -98,24 +108,24 @@ def _load_xlsx_rows(path: Path) -> list[dict[str, Any]]:
     return items
 
 
-def load_rows(task_type: TaskType, path: str | Path) -> list[MessageBatchRow] | list[FileBatchRow]:
-    rows = load_table_rows(path)
+def load_rows(task_type: TaskType, path: str | Path, preferred_encoding: str = "auto") -> list[MessageBatchRow] | list[FileBatchRow]:
+    rows = load_table_rows(path, preferred_encoding=preferred_encoding)
     if task_type is TaskType.MESSAGE:
         return [MessageBatchRow.from_mapping(row) for row in rows]
     return [FileBatchRow.from_mapping(row) for row in rows]
 
 
-def load_table_rows(path: str | Path) -> list[dict[str, Any]]:
+def load_table_rows(path: str | Path, preferred_encoding: str = "auto") -> list[dict[str, Any]]:
     file_path = Path(path)
     if file_path.suffix.lower() == ".csv":
-        return _load_csv_rows(file_path)
+        return _load_csv_rows(file_path, preferred_encoding=preferred_encoding)
     if file_path.suffix.lower() == ".xlsx":
         return _load_xlsx_rows(file_path)
     raise ValueError("仅支持导入 .csv 或 .xlsx 文件")
 
 
-def load_route_rows(path: str | Path) -> list[RelayRouteRow]:
-    rows = load_table_rows(path)
+def load_route_rows(path: str | Path, preferred_encoding: str = "auto") -> list[RelayRouteRow]:
+    rows = load_table_rows(path, preferred_encoding=preferred_encoding)
     normalized = [_normalize_route_mapping(row) for row in rows]
     expanded: list[RelayRouteRow] = []
     for row in normalized:
@@ -160,14 +170,14 @@ def dump_route_rows(rows: list[dict[str, Any]], path: str | Path) -> None:
     dump_table(ROUTE_TEMPLATE_HEADERS, template_rows, path)
 
 
-def load_session_names(path: str | Path) -> list[str]:
+def load_session_names(path: str | Path, preferred_encoding: str = "auto") -> list[str]:
     file_path = Path(path)
     suffix = file_path.suffix.lower()
     if suffix == ".txt":
-        text = _decode_text_file(file_path)
+        text = _decode_text_file(file_path, _encoding_candidates(preferred_encoding))
         return [line.strip() for line in text.splitlines() if line.strip()]
     if suffix == ".csv":
-        rows = _load_csv_rows(file_path)
+        rows = _load_csv_rows(file_path, preferred_encoding=preferred_encoding)
         return _extract_session_names(rows)
     if suffix == ".xlsx":
         rows = _load_xlsx_rows(file_path)

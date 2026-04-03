@@ -124,6 +124,21 @@ class RelayWorkbenchPageTestCase(unittest.TestCase):
         self.assertEqual(len(emitted), 1)
         self.assertIn("不必重复点击", page.result_text.toPlainText())
 
+    def test_focus_package_sequence_selects_matching_row(self):
+        page = RelayWorkbenchPage()
+        page.append_package_rows(
+            [
+                RelayPackageRow(sequence=1, item_type=RelayItemType.TEXT, content="第一条"),
+                RelayPackageRow(sequence=2, item_type=RelayItemType.IMAGE, content="海报.png", file_path="/tmp/海报.png"),
+            ]
+        )
+
+        focused = page.focus_package_sequence(2, "已定位到失败内容。")
+
+        self.assertTrue(focused)
+        self.assertEqual(page.package_table.currentRow(), 1)
+        self.assertIn("已定位到失败内容", page.result_text.toPlainText())
+
     @staticmethod
     def _row_remove_button(table, columns) -> QPushButton | None:
         remove_column = next(index for index, (key, _, _) in enumerate(columns) if key == "remove")

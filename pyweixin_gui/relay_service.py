@@ -257,16 +257,27 @@ class RelayService:
         errors = request.validate()
         if errors:
             raise ValueError(next(iter(errors.values())))
-        if on_progress:
-            on_progress("正在采集聊天记录中的图片/视频...")
         cache_dir = self._relay_cache_dir(request.source_session)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        saved_paths = self.adapter.save_chat_media(
-            session_name=request.source_session,
-            number=request.media_limit,
-            target_folder=str(cache_dir),
-            options=runtime_options,
-        )
+        if request.collect_mode is RelayCollectMode.PERIOD:
+            if on_progress:
+                on_progress(f"正在采集{self._recent_range_label(request.recent_range)}的图片/视频...")
+            saved_paths = self.adapter.save_recent_chat_media(
+                session_name=request.source_session,
+                recent_range=request.recent_range,
+                number=request.media_limit,
+                target_folder=str(cache_dir),
+                options=runtime_options,
+            )
+        else:
+            if on_progress:
+                on_progress("正在采集聊天记录中的图片/视频...")
+            saved_paths = self.adapter.save_chat_media(
+                session_name=request.source_session,
+                number=request.media_limit,
+                target_folder=str(cache_dir),
+                options=runtime_options,
+            )
         files = [Path(path) for path in reversed(saved_paths) if Path(path).is_file()]
         rows: list[RelayPackageRow] = []
         for index, file_path in enumerate(files, start=1):
@@ -281,7 +292,12 @@ class RelayService:
                     collected_at=datetime.fromtimestamp(file_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
                 )
             )
-        warning = "" if rows else "当前没有采集到可转发的历史图片或视频。"
+        if rows:
+            warning = ""
+        elif request.collect_mode is RelayCollectMode.PERIOD:
+            warning = f"在{self._recent_range_label(request.recent_range)}范围内没有采集到可转发的图片或视频。"
+        else:
+            warning = "当前没有采集到可转发的历史图片或视频。"
         return RelayCollectionResult(source_session=request.source_session, rows=rows, warning=warning)
 
     def validate_routes(
@@ -525,8 +541,10 @@ class RelayService:
             if should_stop and should_stop():
                 break
             sent_count = 0
+            current_item: RelayPackageRow | None = None
             try:
                 for item in package_rows:
+                    current_item = item
                     if on_progress:
                         on_progress(f"正在发送 {target_index}/{len(targets)}：{target_session} -> {item.preview_text()[:20]}")
                     self.adapter.send_relay_item(target_session, item, runtime_options)
@@ -535,12 +553,18 @@ class RelayService:
                 success_count += 1
             except Exception as exc:
                 ui_error = self.adapter.map_runtime_exception(exc)
+                failed_sequence = current_item.sequence if current_item is not None else None
+                failed_item_type = current_item.item_type.value if current_item is not None else ""
+                failed_item_preview = current_item.preview_text()[:120] if current_item is not None else ""
                 results.append(
                     RelayTargetResult(
                         target_session=target_session,
                         success=False,
                         sent_count=sent_count,
                         error_message=ui_error.message or ui_error.title,
+                        failed_sequence=failed_sequence,
+                        failed_item_type=failed_item_type,
+                        failed_item_preview=failed_item_preview,
                     )
                 )
                 failure_count += 1

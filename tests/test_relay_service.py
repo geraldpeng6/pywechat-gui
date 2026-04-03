@@ -27,6 +27,7 @@ class FakeAdapter:
     def __init__(self):
         self.called_recent_text = False
         self.called_recent_files = False
+        self.called_recent_media = False
 
     def dump_chat_history(self, session_name, number, options):
         return ["较新的消息", "较早的消息"], ["今天 10:01", "今天 10:00"]
@@ -77,6 +78,13 @@ class FakeAdapter:
         (folder / "截图.png").write_text("png", encoding="utf-8")
         (folder / "演示视频.mp4").write_text("mp4", encoding="utf-8")
         return [str(folder / "截图.png"), str(folder / "演示视频.mp4")]
+
+    def save_recent_chat_media(self, session_name, recent_range, number, target_folder, options):
+        self.called_recent_media = True
+        folder = Path(target_folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "今天图片.png").write_text("png", encoding="utf-8")
+        return [str(folder / "今天图片.png")]
 
     def send_relay_item(self, target_session, item, options):
         if target_session == "发送失败":
@@ -166,6 +174,15 @@ class RelayServiceTestCase(unittest.TestCase):
         self.assertEqual(len(result.rows), 2)
         self.assertEqual({row.item_type for row in result.rows}, {RelayItemType.IMAGE, RelayItemType.FILE})
 
+    def test_collect_media_rows_by_period(self):
+        result = self.service.collect_media_rows(
+            RelayCollectMediaRequest(source_session="上游A", media_limit=5, collect_mode=RelayCollectMode.PERIOD),
+            self.options,
+        )
+        self.assertTrue(self.adapter.called_recent_media)
+        self.assertEqual(len(result.rows), 1)
+        self.assertEqual(result.rows[0].content, "今天图片.png")
+
     def test_validate_routes(self):
         rows = [
             RelayRouteRow(downstream_session="下游B"),
@@ -199,6 +216,10 @@ class RelayServiceTestCase(unittest.TestCase):
         self.assertEqual(result.target_count, 2)
         self.assertEqual(result.success_count, 1)
         self.assertEqual(result.failure_count, 1)
+        failed = next(row for row in result.results if not row.success)
+        self.assertEqual(failed.failed_sequence, 1)
+        self.assertEqual(failed.failed_item_type, RelayItemType.TEXT.value)
+        self.assertEqual(failed.failed_item_preview, "文本1")
 
     def test_load_export_folder_rows(self):
         export_root = Path(self.tempdir.name) / "导出目录"

@@ -36,7 +36,7 @@ from ..export_service import ChatExportService
 from ..export_worker import ChatExportWorker
 from ..import_export import dump_rows
 from ..models import AppSettings, ChatBatchExportRequest, ChatBatchExportResult, ChatExportRequest, ChatExportResult, ExecutionRecord, ExecutionRowResult, ExportHistoryRecord, FileBatchRow, GroupScanResult, MessageBatchRow, RelayCollectFilesRequest, RelayCollectMediaRequest, RelayCollectionResult, RelayCollectTextRequest, RelayPackageExportRequest, RelayPackageRow, RelayRouteRow, RelaySendRequest, RelaySendResult, RelayValidationRequest, RelayValidationResult, ResourceExportRequest, ResourceExportResult, SessionScanRequest, SessionScanResult, TaskTemplate, TaskType, dataclass_from_json, dataclass_to_json, relay_template_from_json, relay_template_to_json
-from ..presentation import execution_metrics, execution_type_label, export_history_can_rerun, export_history_can_retry_failed, export_history_failed_sessions, export_type_label, filter_executions, filter_templates, format_export_history_detail, rebuild_export_request, serialize_export_detail, summarize_failures, template_metrics, template_type_label
+from ..presentation import execution_metrics, execution_type_label, export_history_can_rerun, export_history_can_retry_failed, export_history_failed_sessions, export_type_label, filter_executions, filter_export_records, filter_templates, format_export_history_detail, rebuild_export_request, serialize_export_detail, summarize_failures, template_metrics, template_type_label
 from ..relay_service import RelayService
 from ..relay_worker import RelayWorker
 from ..resource_export_service import ResourceExportService, export_kind_label
@@ -135,6 +135,8 @@ class MainWindow(QMainWindow):
 
         self._bind_events()
         self._load_settings_to_form()
+        self._apply_import_encoding_settings()
+        self._apply_history_retention(notify=False)
         self.refresh_environment()
         self.refresh_templates()
         self.refresh_history()
@@ -267,6 +269,7 @@ class MainWindow(QMainWindow):
 
         self.history_page.refresh_button.clicked.connect(self.refresh_history)
         self.history_page.search_input.textChanged.connect(self.apply_history_filter)
+        self.history_page.task_type_filter.currentIndexChanged.connect(self.apply_history_filter)
         self.history_page.failed_only_checkbox.toggled.connect(self.apply_history_filter)
         self.history_page.open_message_requested.connect(lambda: self._open_page(self.relay_page))
         self.history_page.open_file_requested.connect(self._open_chat_export_page)
@@ -279,6 +282,7 @@ class MainWindow(QMainWindow):
         self.history_page.retry_button.clicked.connect(self.retry_selected_execution_failures)
 
         self.export_history_page.search_input.textChanged.connect(self.apply_export_history_filter)
+        self.export_history_page.kind_filter.currentIndexChanged.connect(self.apply_export_history_filter)
         self.export_history_page.table.itemSelectionChanged.connect(self.show_export_history_detail)
         self.export_history_page.open_folder_button.clicked.connect(self.open_selected_export_folder)
         self.export_history_page.open_summary_button.clicked.connect(self.open_selected_export_summary)
@@ -353,7 +357,12 @@ class MainWindow(QMainWindow):
         executions = self._execution_cache
         table = self.history_page.execution_table
         table.setRowCount(0)
-        filtered = filter_executions(executions, query, self.history_page.failed_only_checkbox.isChecked())
+        filtered = filter_executions(
+            executions,
+            query,
+            self.history_page.failed_only_checkbox.isChecked(),
+            str(self.history_page.task_type_filter.currentData() or "all"),
+        )
         for row_index, execution in enumerate(filtered):
             table.insertRow(row_index)
             values = [
@@ -409,6 +418,27 @@ class MainWindow(QMainWindow):
         theme_index = page.theme.findData(self.settings.theme)
         if theme_index >= 0:
             page.theme.setCurrentIndex(theme_index)
+        retention_index = page.history_retention.findData(self.settings.history_retention)
+        if retention_index >= 0:
+            page.history_retention.setCurrentIndex(retention_index)
+
+    def _apply_import_encoding_settings(self) -> None:
+        import_encoding = self.settings.import_encoding
+        self.message_page.set_import_encoding(import_encoding)
+        self.file_page.set_import_encoding(import_encoding)
+        self.export_page.set_import_encoding(import_encoding)
+        self.relay_page.set_import_encoding(import_encoding)
+
+    def _apply_history_retention(self, notify: bool) -> tuple[int, int]:
+        execution_count, export_count = self.storage.prune_history(self.settings.history_retention)
+        if notify and (execution_count or export_count):
+            parts = []
+            if execution_count:
+                parts.append(f"执行记录 {execution_count} 条")
+            if export_count:
+                parts.append(f"导出记录 {export_count} 条")
+            self.status_bar.showMessage(f"已按保留策略自动清理 {'，'.join(parts)}。", 6000)
+        return execution_count, export_count
 
     def save_settings(self) -> None:
         page = self.settings_page
@@ -422,12 +452,24 @@ class MainWindow(QMainWindow):
             window_height=page.window_height.value(),
             import_encoding=str(page.import_encoding.currentData() or "auto"),
             theme=str(page.theme.currentData() or "light"),
-            history_retention=self.settings.history_retention,
+            history_retention=str(page.history_retention.currentData() or "forever"),
             first_run_risk_ack=True,
         )
         self.settings_manager.save(self.settings)
+        self._apply_import_encoding_settings()
+        execution_count, export_count = self._apply_history_retention(notify=False)
         self.resize(self.settings.window_width, self.settings.window_height)
-        self.status_bar.showMessage("设置已保存", 4000)
+        self.refresh_history()
+        self.refresh_export_history()
+        if execution_count or export_count:
+            parts = []
+            if execution_count:
+                parts.append(f"执行记录 {execution_count} 条")
+            if export_count:
+                parts.append(f"导出记录 {export_count} 条")
+            self.status_bar.showMessage(f"设置已保存，并已按保留策略清理 {'，'.join(parts)}。", 6000)
+        else:
+            self.status_bar.showMessage("设置已保存", 4000)
 
     def save_template(self, task_type: TaskType, rows: list[MessageBatchRow] | list[FileBatchRow] | dict) -> None:
         name, ok = QInputDialog.getText(self, "保存模板", "模板名称")
@@ -955,11 +997,14 @@ class MainWindow(QMainWindow):
             f"导出目录：{result.export_folder}",
             f"消息数量：{result.message_count}",
             f"文件数量：{result.file_count}",
+            f"图片/视频数量：{result.media_count}",
         ]
         if result.messages_xlsx:
             lines.append(f"聊天记录：{result.messages_xlsx}")
         if result.files_folder:
             lines.append(f"文件目录：{result.files_folder}")
+        if result.media_folder:
+            lines.append(f"图片/视频目录：{result.media_folder}")
         if result.warnings:
             lines.append("")
             lines.append("注意事项：")
@@ -972,7 +1017,7 @@ class MainWindow(QMainWindow):
             export_kind="chat",
             title=result.session_name,
             export_folder=result.export_folder,
-            exported_count=result.message_count + result.file_count,
+            exported_count=result.message_count + result.file_count + result.media_count,
             summary_path=None,
             detail_json=serialize_export_detail(
                 "chat",
@@ -981,8 +1026,10 @@ class MainWindow(QMainWindow):
                     "session_name": result.session_name,
                     "message_count": result.message_count,
                     "file_count": result.file_count,
+                    "media_count": result.media_count,
                     "messages_xlsx": result.messages_xlsx,
                     "files_folder": result.files_folder,
+                    "media_folder": result.media_folder,
                     "warnings": result.warnings,
                 },
             ),
@@ -1103,6 +1150,12 @@ class MainWindow(QMainWindow):
                 for row in result.results[:20]:
                     status = "成功" if row.success else "失败"
                     detail = f"{row.target_session}：{status}，已发 {row.sent_count} 条"
+                    if row.failed_sequence is not None:
+                        item_type_labels = {"text": "文本", "file": "文件", "image": "图片"}
+                        failed_type = item_type_labels.get(row.failed_item_type, row.failed_item_type or "内容")
+                        detail += f"；失败于第 {row.failed_sequence} 条{failed_type}"
+                        if row.failed_item_preview:
+                            detail += f"（{row.failed_item_preview}）"
                     if row.error_message:
                         detail += f"；{row.error_message}"
                     lines.append(f"- {detail}")
@@ -1264,6 +1317,8 @@ class MainWindow(QMainWindow):
             button.setEnabled(not is_running)
         self.history_page.failed_only_checkbox.setEnabled(not is_running)
         self.export_history_page.search_input.setEnabled(not is_running)
+        self.export_history_page.kind_filter.setEnabled(not is_running)
+        self.history_page.task_type_filter.setEnabled(not is_running)
         if not is_running:
             self._update_history_action_state()
             self._update_export_history_action_state()
@@ -1273,12 +1328,7 @@ class MainWindow(QMainWindow):
         records = self._export_history_cache
         table = self.export_history_page.table
         table.setRowCount(0)
-        filtered = []
-        for record in records:
-            haystack = " ".join([record.export_kind, record.title, record.export_folder, record.created_at or ""]).lower()
-            if query and query not in haystack:
-                continue
-            filtered.append(record)
+        filtered = filter_export_records(records, query, str(self.export_history_page.kind_filter.currentData() or "all"))
         for row_index, record in enumerate(filtered):
             table.insertRow(row_index)
             values = [str(record.id), export_type_label(record.export_kind), record.title, str(record.exported_count), record.created_at or ""]
@@ -1346,6 +1396,11 @@ class MainWindow(QMainWindow):
             self.export_page.apply_batch_request(request)
             self._open_chat_export_page()
             self.start_batch_export(request)
+            return
+        if kind == "relay_package":
+            self.import_relay_folder(str(request))
+            self._open_page(self.relay_page)
+            self.status_bar.showMessage("已从导出历史把发送文件夹重新导入工作台。", 6000)
             return
         self.resource_page.apply_request(request)
         self._open_resource_export_page()
@@ -1453,6 +1508,15 @@ class MainWindow(QMainWindow):
             return file_paths[:120]
         if "validation_status" in payload:
             return f"{payload.get('validation_status', '')} {payload.get('validation_message', '')}".strip()
+        if "target_session" in payload and payload.get("failed_sequence"):
+            item_type_labels = {"text": "文本", "file": "文件", "image": "图片"}
+            raw_type = str(payload.get("failed_item_type", "") or "").strip()
+            failed_type = item_type_labels.get(raw_type, raw_type or "内容")
+            detail = f"失败于第 {payload.get('failed_sequence')} 条{failed_type}"
+            failed_item_preview = str(payload.get("failed_item_preview", "") or "").strip()
+            if failed_item_preview:
+                detail += f"：{failed_item_preview}"
+            return detail
         package_preview = payload.get("package_preview")
         if isinstance(package_preview, list) and package_preview:
             item_type_labels = {"text": "文本", "file": "文件", "image": "图片"}
@@ -1555,6 +1619,9 @@ class MainWindow(QMainWindow):
                             "sent_count": row.sent_count,
                             "item_count": result.item_count,
                             "test_only": result.test_only,
+                            "failed_sequence": row.failed_sequence,
+                            "failed_item_type": row.failed_item_type,
+                            "failed_item_preview": row.failed_item_preview,
                             "package_preview": package_preview,
                         },
                         ensure_ascii=False,
@@ -1651,6 +1718,22 @@ class MainWindow(QMainWindow):
             return False
         route_rows = [RelayRouteRow(downstream_session=row.session_name) for row in failed_results]
         source_session = str(first_payload.get("source_session", "") or "").strip() if isinstance(first_payload, dict) else ""
+        failed_sequences = []
+        for row in failed_results:
+            payload = row.payload
+            if not isinstance(payload, dict):
+                continue
+            sequence = payload.get("failed_sequence")
+            if isinstance(sequence, int):
+                failed_sequences.append(sequence)
+            elif isinstance(sequence, str) and sequence.isdigit():
+                failed_sequences.append(int(sequence))
+        focus_sequence = failed_sequences[0] if failed_sequences else None
+        focus_payload = next((row.payload for row in failed_results if row.payload and row.payload.get("failed_sequence") == focus_sequence), first_payload)
+        focus_preview = str(focus_payload.get("failed_item_preview", "") or "").strip() if isinstance(focus_payload, dict) else ""
+        focus_type = str(focus_payload.get("failed_item_type", "") or "").strip() if isinstance(focus_payload, dict) else ""
+        type_labels = {"text": "文本", "file": "文件", "image": "图片"}
+        focus_type_label = type_labels.get(focus_type, focus_type or "内容")
         self.relay_page.load_template_payload(
             {
                 "source_session": source_session,
@@ -1659,5 +1742,18 @@ class MainWindow(QMainWindow):
                 "route_rows": route_rows,
             }
         )
+        result_lines = [
+            f"已回填 {len(route_rows)} 个失败收件人。",
+        ]
+        if focus_sequence is not None:
+            detail = f"已定位到第 {focus_sequence} 条{focus_type_label}"
+            if focus_preview:
+                detail += f"：{focus_preview}"
+            result_lines.append(detail)
+        elif failed_results:
+            result_lines.append("这次失败未记录到具体素材位置，请优先检查当前发送顺序。")
+        self.relay_page.focus_package_sequence(focus_sequence, "\n".join(result_lines))
+        self.relay_page.refresh_package_summary("已从执行历史回填发送内容，并定位到失败位置。")
+        self.relay_page.refresh_route_summary(f"已回填 {len(route_rows)} 个失败收件人，请确认后重试。")
         self._open_page(self.relay_page)
         return True

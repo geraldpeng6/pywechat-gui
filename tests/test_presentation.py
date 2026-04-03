@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from pyweixin_gui.models import ExecutionRecord, ExecutionRowResult, TaskTemplate, TaskType
+from pyweixin_gui.models import ExecutionRecord, ExecutionRowResult, ExportHistoryRecord, TaskTemplate, TaskType
 from pyweixin_gui.presentation import (
     execution_metrics,
     filter_executions,
+    filter_export_records,
     filter_templates,
     summarize_failures,
     template_metrics,
@@ -61,6 +62,10 @@ class PresentationTestCase(unittest.TestCase):
         self.assertEqual(metrics["success"], 1)
         self.assertEqual(metrics["failed"], 1)
 
+        relay_filtered = filter_executions(executions, "", failed_only=False, task_type_filter="message")
+        self.assertEqual(len(relay_filtered), 1)
+        self.assertEqual(relay_filtered[0].id, 1)
+
     def test_relay_execution_uses_readable_label(self):
         executions = [
             ExecutionRecord(
@@ -88,6 +93,15 @@ class PresentationTestCase(unittest.TestCase):
         summary = summarize_failures(rows)
         self.assertIn("SESSION_NOT_FOUND x2", summary)
         self.assertIn("网络不可用 x1", summary)
+
+    def test_filter_export_records_by_kind(self):
+        records = [
+            ExportHistoryRecord(export_kind="chat", title="项目群", export_folder="C:/exports/a", exported_count=3, created_at="2026-04-03 10:00:00"),
+            ExportHistoryRecord(export_kind="relay_package", title="周报发送包", export_folder="C:/exports/b", exported_count=5, created_at="2026-04-03 11:00:00"),
+        ]
+        filtered = filter_export_records(records, "", export_kind_filter="relay_package")
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].title, "周报发送包")
 
 
 if __name__ == "__main__":

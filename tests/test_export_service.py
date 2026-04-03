@@ -21,6 +21,13 @@ class FakeAdapter:
         (folder / "报告.pdf").write_text("demo", encoding="utf-8")
         return [str(folder / "报告.pdf")]
 
+    def save_chat_media(self, session_name, number, target_folder, options):
+        folder = Path(target_folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "截图.png").write_text("img", encoding="utf-8")
+        (folder / "演示视频.mp4").write_text("video", encoding="utf-8")
+        return [str(folder / "截图.png"), str(folder / "演示视频.mp4")]
+
 
 class ParseFailureAdapter(FakeAdapter):
     def save_chat_files(self, session_name, number, target_folder, options):
@@ -42,6 +49,7 @@ class ExportServiceTestCase(unittest.TestCase):
                 target_folder=tempdir,
                 export_messages=False,
                 export_files=True,
+                export_images=False,
                 file_limit=10,
             )
             first = service.export_chat_bundle(request, RuntimeOptions())
@@ -70,6 +78,7 @@ class ExportServiceTestCase(unittest.TestCase):
             self.assertTrue(Path(result.messages_xlsx).exists())
             self.assertEqual(result.message_count, 2)
             self.assertEqual(result.file_count, 1)
+            self.assertEqual(result.media_count, 0)
             self.assertEqual(result.warnings, [])
             self.assertEqual(Path(result.messages_xlsx).name, "聊天记录.xlsx")
             self.assertEqual(Path(result.files_folder).name, "聊天文件")
@@ -90,9 +99,29 @@ class ExportServiceTestCase(unittest.TestCase):
             result = service.export_chat_bundle(request, RuntimeOptions())
             self.assertEqual(result.message_count, 2)
             self.assertEqual(result.file_count, 0)
+            self.assertEqual(result.media_count, 0)
             self.assertTrue(result.messages_xlsx)
             self.assertTrue(result.files_folder)
             self.assertTrue(any("聊天文件未整理到结果中" in warning for warning in result.warnings))
+
+    def test_export_bundle_includes_media_when_requested(self):
+        service = ChatExportService(FakeAdapter())
+        with tempfile.TemporaryDirectory() as tempdir:
+            request = ChatExportRequest(
+                session_name="好友A",
+                target_folder=tempdir,
+                export_messages=False,
+                export_files=False,
+                export_images=True,
+                file_limit=10,
+            )
+            result = service.export_chat_bundle(request, RuntimeOptions())
+
+        self.assertEqual(result.message_count, 0)
+        self.assertEqual(result.file_count, 0)
+        self.assertEqual(result.media_count, 2)
+        self.assertTrue(result.media_folder)
+        self.assertEqual(Path(result.media_folder).name, "聊天图片与视频")
 
     @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl not installed")
     def test_export_bundle_orders_messages_from_oldest_to_newest(self):

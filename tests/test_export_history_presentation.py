@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from pyweixin_gui.models import ChatBatchExportRequest, ExportHistoryRecord, ResourceExportKind, ResourceExportRequest
+from pyweixin_gui.models import ChatBatchExportRequest, ChatExportRequest, ExportHistoryRecord, ResourceExportKind, ResourceExportRequest
 from pyweixin_gui.presentation import export_history_can_rerun, export_history_can_retry_failed, export_history_failed_sessions, format_export_history_detail, rebuild_export_request, serialize_export_detail
 
 
@@ -39,6 +39,70 @@ class ExportHistoryPresentationTestCase(unittest.TestCase):
         _, retry_request = rebuild_export_request(record, failed_only=True)
         self.assertEqual(retry_request.session_names, ["客户群"])
         self.assertIn("批量会话数", format_export_history_detail(record))
+
+    def test_chat_export_record_shows_media_flags_and_counts(self):
+        request = ChatExportRequest(
+            session_name="项目群",
+            target_folder="C:/exports",
+            export_messages=True,
+            export_files=False,
+            export_images=True,
+            message_limit=20,
+            file_limit=8,
+        )
+        record = ExportHistoryRecord(
+            export_kind="chat",
+            title="项目群",
+            export_folder="C:/exports/项目群",
+            exported_count=5,
+            detail_json=serialize_export_detail(
+                "chat",
+                request,
+                {
+                    "message_count": 3,
+                    "file_count": 0,
+                    "media_count": 2,
+                    "media_folder": "C:/exports/项目群/聊天图片与视频",
+                    "warnings": [],
+                },
+            ),
+        )
+
+        detail = format_export_history_detail(record)
+        self.assertIn("导出图片/视频", detail)
+        self.assertIn("图片/视频数量", detail)
+
+    def test_relay_package_record_can_rebuild_to_folder_import(self):
+        record = ExportHistoryRecord(
+            export_kind="relay_package",
+            title="周报发送包",
+            export_folder="C:/exports/周报发送包",
+            exported_count=4,
+            detail_json=serialize_export_detail(
+                "relay_package",
+                {
+                    "source_session": "项目群",
+                    "package_name": "周报发送包",
+                    "target_folder": "C:/exports",
+                    "item_count": 4,
+                },
+                {
+                    "package_folder": "C:/exports/周报发送包",
+                    "item_count": 4,
+                    "message_count": 2,
+                    "file_count": 2,
+                    "manifest_path": "C:/exports/周报发送包/发送清单.xlsx",
+                    "files_folder": "C:/exports/周报发送包/素材文件",
+                },
+            ),
+        )
+
+        kind, payload = rebuild_export_request(record)
+        detail = format_export_history_detail(record)
+        self.assertEqual(kind, "relay_package")
+        self.assertEqual(payload, "C:/exports/周报发送包")
+        self.assertIn("发送清单", detail)
+        self.assertIn("文件目录", detail)
 
     def test_resource_export_record_rebuild(self):
         request = ResourceExportRequest(

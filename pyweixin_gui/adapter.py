@@ -437,10 +437,36 @@ class PyWeixinAdapter:
         return results
 
     def save_chat_media(self, session_name: str, number: int, target_folder: str, options: RuntimeOptions) -> list[str]:
+        preview_window, target_dir = self._open_chat_media_preview(
+            session_name=session_name,
+            target_folder=target_folder,
+            options=options,
+        )
+        if preview_window is None:
+            return []
+        return self._save_media_from_preview(
+            preview_window=preview_window,
+            target_dir=target_dir,
+            session_name=session_name,
+            save_limit=number,
+        )
+
+    def save_recent_chat_media(
+        self,
+        session_name: str,
+        recent_range: RelayRecentRange | str,
+        number: int,
+        target_folder: str,
+        options: RuntimeOptions,
+    ) -> list[str]:
         from pywinauto import Desktop
         import pyautogui
 
         from pyweixin.WeChatTools import Navigator
+
+        normalized_range = coerce_relay_recent_range(recent_range)
+        if not isinstance(normalized_range, RelayRecentRange):
+            raise ValueError("请选择有效的时间范围")
 
         target_dir = Path(target_folder).expanduser().resolve()
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -463,6 +489,11 @@ class PyWeixinAdapter:
             chat_history_window.close()
             return []
 
+        visit_limit = self._count_recent_media_visit_limit(items, normalized_range, datetime.now(), number)
+        if visit_limit <= 0:
+            chat_history_window.close()
+            return []
+
         items[-1].descendants(control_type="Button")[-1].double_click_input()
         chat_history_window.close()
 
@@ -470,13 +501,66 @@ class PyWeixinAdapter:
         preview_window = self._find_preview_window(desktop)
         if preview_window is None or not preview_window.exists(timeout=3):
             return []
+        return self._save_media_from_preview(
+            preview_window=preview_window,
+            target_dir=target_dir,
+            session_name=session_name,
+            save_limit=number,
+            visit_limit=visit_limit,
+        )
+
+    def _open_chat_media_preview(self, session_name: str, target_folder: str, options: RuntimeOptions):
+        from pywinauto import Desktop
+        import pyautogui
+
+        from pyweixin.WeChatTools import Navigator
+
+        target_dir = Path(target_folder).expanduser().resolve()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        pyautogui.FAILSAFE = False
+
+        chat_history_window = Navigator.open_chat_history(
+            friend=session_name,
+            TabItem="图片与视频",
+            search_pages=options.search_pages,
+            is_maximize=options.is_maximize,
+            close_weixin=options.close_weixin,
+        )
+        media_list = self._find_media_history_list(chat_history_window)
+        if media_list is None or not media_list.exists(timeout=0.5):
+            chat_history_window.close()
+            return None, target_dir
+
+        items = [item for item in media_list.children() if item.descendants(control_type="Button")]
+        if not items:
+            chat_history_window.close()
+            return None, target_dir
+
+        items[-1].descendants(control_type="Button")[-1].double_click_input()
+        chat_history_window.close()
+
+        desktop = Desktop(backend="uia")
+        preview_window = self._find_preview_window(desktop)
+        if preview_window is None or not preview_window.exists(timeout=3):
+            return None, target_dir
+        return preview_window, target_dir
+
+    def _save_media_from_preview(
+        self,
+        preview_window,
+        target_dir: Path,
+        session_name: str,
+        save_limit: int,
+        visit_limit: int | None = None,
+    ) -> list[str]:
+        import pyautogui
 
         saved_paths: list[str] = []
         saved_count = 0
-        visited_steps = 0
-        max_steps = max(number * 3, number + 5)
-        while saved_count < number and visited_steps < max_steps:
-            visited_steps += 1
+        visited_items = 0
+        max_visits = visit_limit if visit_limit is not None else max(save_limit * 3, save_limit + 5)
+        while saved_count < save_limit and visited_items < max_visits:
+            visited_items += 1
             media_kind = self._detect_preview_media_kind(preview_window)
             if media_kind is None:
                 self._move_preview_to_previous(pyautogui)
@@ -717,6 +801,33 @@ class PyWeixinAdapter:
         candidate = str(texts[-2].window_text() or "").strip()
         match = FILE_TIMESTAMP_PATTERN.search(candidate)
         return match.group(1).strip() if match else candidate
+
+    @staticmethod
+    def _extract_media_timestamp(item) -> str:
+        candidates = [str(item.window_text() or "").strip()]
+        candidates.extend(str(text.window_text() or "").strip() for text in item.descendants(control_type="Text"))
+        for candidate in reversed(candidates):
+            if not candidate:
+                continue
+            match = FILE_TIMESTAMP_PATTERN.search(candidate)
+            if match:
+                return match.group(1).strip()
+        return ""
+
+    @staticmethod
+    def _count_recent_media_visit_limit(items: list, recent_range: RelayRecentRange, now: datetime, save_limit: int) -> int:
+        visit_limit = 0
+        matched_items = 0
+        for item in reversed(items):
+            timestamp_text = PyWeixinAdapter._extract_media_timestamp(item)
+            if timestamp_text:
+                if not PyWeixinAdapter._recent_label_in_range(timestamp_text, recent_range, now):
+                    break
+                matched_items += 1
+            visit_limit += 1
+            if matched_items >= save_limit:
+                break
+        return visit_limit if matched_items > 0 else 0
 
     @staticmethod
     def _extract_file_sender(item) -> str:

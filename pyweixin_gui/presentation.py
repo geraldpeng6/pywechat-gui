@@ -63,11 +63,19 @@ def template_metrics(templates: list[TaskTemplate]) -> dict[str, int]:
     }
 
 
-def filter_executions(executions: list[ExecutionRecord], query: str, failed_only: bool) -> list[ExecutionRecord]:
+def filter_executions(
+    executions: list[ExecutionRecord],
+    query: str,
+    failed_only: bool,
+    task_type_filter: str = "all",
+) -> list[ExecutionRecord]:
     normalized = query.strip().lower()
+    normalized_task_type = task_type_filter.strip().lower()
     filtered: list[ExecutionRecord] = []
     for execution in executions:
         if failed_only and execution.failure_count == 0:
+            continue
+        if normalized_task_type not in {"", "all"} and execution.task_type.value != normalized_task_type:
             continue
         haystack = " ".join(
             [
@@ -82,6 +90,24 @@ def filter_executions(executions: list[ExecutionRecord], query: str, failed_only
         if normalized and normalized not in haystack:
             continue
         filtered.append(execution)
+    return filtered
+
+
+def filter_export_records(
+    records: list[ExportHistoryRecord],
+    query: str,
+    export_kind_filter: str = "all",
+) -> list[ExportHistoryRecord]:
+    normalized = query.strip().lower()
+    normalized_kind = export_kind_filter.strip().lower()
+    filtered: list[ExportHistoryRecord] = []
+    for record in records:
+        if normalized_kind not in {"", "all"} and record.export_kind.lower() != normalized_kind:
+            continue
+        haystack = " ".join([record.export_kind, record.title, record.export_folder, record.created_at or ""]).lower()
+        if normalized and normalized not in haystack:
+            continue
+        filtered.append(record)
     return filtered
 
 
@@ -180,6 +206,14 @@ def rebuild_export_request(record: ExportHistoryRecord, failed_only: bool = Fals
                 return None
             request = {**request, "session_names": failed_sessions}
         return "chat_batch", ChatBatchExportRequest(**request)
+    if record.export_kind == "relay_package":
+        result = detail.get("result", detail)
+        if isinstance(result, dict):
+            package_folder = str(result.get("package_folder", "") or "").strip()
+            if package_folder:
+                return "relay_package", package_folder
+        export_folder = str(record.export_folder or "").strip()
+        return ("relay_package", export_folder) if export_folder else None
     if record.export_kind in {kind.value for kind in ResourceExportKind}:
         return "resource", ResourceExportRequest(
             export_kind=ResourceExportKind(request["export_kind"]),
@@ -208,8 +242,9 @@ def _request_lines(export_kind: str, request: dict) -> list[tuple[str, str]]:
             ("导出目录", str(request.get("target_folder", ""))),
             ("导出文本消息", "是" if request.get("export_messages") else "否"),
             ("导出聊天文件", "是" if request.get("export_files") else "否"),
+            ("导出图片/视频", "是" if request.get("export_images") else "否"),
             ("消息条数", str(request.get("message_limit", ""))),
-            ("文件数量", str(request.get("file_limit", ""))),
+            ("文件/媒体数量", str(request.get("file_limit", ""))),
         ]
     if export_kind == "chat_batch":
         session_names = request.get("session_names", [])
@@ -219,8 +254,9 @@ def _request_lines(export_kind: str, request: dict) -> list[tuple[str, str]]:
             ("导出目录", str(request.get("target_folder", ""))),
             ("导出文本消息", "是" if request.get("export_messages") else "否"),
             ("导出聊天文件", "是" if request.get("export_files") else "否"),
+            ("导出图片/视频", "是" if request.get("export_images") else "否"),
             ("消息条数", str(request.get("message_limit", ""))),
-            ("文件数量", str(request.get("file_limit", ""))),
+            ("文件/媒体数量", str(request.get("file_limit", ""))),
         ]
     if export_kind == "relay_package":
         return [
@@ -244,6 +280,7 @@ def _result_lines(export_kind: str, result: dict) -> list[tuple[str, str]]:
         return [
             ("消息数量", str(result.get("message_count", 0))),
             ("文件数量", str(result.get("file_count", 0))),
+            ("图片/视频数量", str(result.get("media_count", 0))),
             ("注意事项", warning_text),
         ]
     if export_kind == "chat_batch":
@@ -262,11 +299,18 @@ def _result_lines(export_kind: str, result: dict) -> list[tuple[str, str]]:
             ("失败名单预览", "、".join(failed_names[:5]) if failed_names else "无"),
         ]
     if export_kind == "relay_package":
-        return [
+        lines = [
             ("内容总数", str(result.get("item_count", 0))),
             ("文本条数", str(result.get("message_count", 0))),
             ("文件条数", str(result.get("file_count", 0))),
         ]
+        manifest_path = str(result.get("manifest_path", "") or "").strip()
+        files_folder = str(result.get("files_folder", "") or "").strip()
+        if manifest_path:
+            lines.append(("发送清单", manifest_path))
+        if files_folder:
+            lines.append(("文件目录", files_folder))
+        return lines
     exported_paths = result.get("exported_paths", [])
     preview = "；".join(str(item) for item in exported_paths[:3]) if isinstance(exported_paths, list) and exported_paths else "无"
     return [

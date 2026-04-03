@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .models import ExecutionRecord, ExecutionRowResult, ExportHistoryRecord, TaskTemplate, TaskType
+from .models import ExecutionRecord, ExecutionRowResult, ExportHistoryRecord, TaskTemplate, TaskType, history_retention_days
 
 
 class AppStorage:
@@ -218,6 +219,32 @@ class AppStorage:
             conn.execute("DELETE FROM execution_rows")
             conn.execute("DELETE FROM executions")
 
+    def prune_history(self, retention: str, now: datetime | None = None) -> tuple[int, int]:
+        days = history_retention_days(retention)
+        if days is None:
+            return 0, 0
+        reference = now or datetime.now(timezone.utc)
+        cutoff = reference - timedelta(days=days)
+        execution_ids: list[int] = []
+        export_ids: list[int] = []
+        with self.connect() as conn:
+            execution_rows = conn.execute("SELECT id, started_at FROM executions").fetchall()
+            for row in execution_rows:
+                started_at = self._parse_timestamp(row["started_at"])
+                if started_at is not None and started_at < cutoff:
+                    execution_ids.append(int(row["id"]))
+            if execution_ids:
+                conn.executemany("DELETE FROM executions WHERE id=?", [(item,) for item in execution_ids])
+
+            export_rows = conn.execute("SELECT id, created_at FROM export_records").fetchall()
+            for row in export_rows:
+                created_at = self._parse_timestamp(row["created_at"])
+                if created_at is not None and created_at < cutoff:
+                    export_ids.append(int(row["id"]))
+            if export_ids:
+                conn.executemany("DELETE FROM export_records WHERE id=?", [(item,) for item in export_ids])
+        return len(execution_ids), len(export_ids)
+
     def save_export_record(self, record: ExportHistoryRecord) -> ExportHistoryRecord:
         with self.connect() as conn:
             if record.id is None:
@@ -320,3 +347,20 @@ class AppStorage:
             detail_json=row["detail_json"],
             created_at=row["created_at"],
         )
+
+    @staticmethod
+    def _parse_timestamp(value: str | None) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        normalized = text.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            try:
+                parsed = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
