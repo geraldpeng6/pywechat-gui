@@ -7,9 +7,10 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtWidgets import QApplication, QPushButton
+    from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 except ModuleNotFoundError:  # pragma: no cover - optional GUI dependency in local test env
     QApplication = None  # type: ignore[assignment]
+    QMessageBox = None  # type: ignore[assignment]
     QPushButton = None  # type: ignore[assignment]
 
 from pyweixin_gui.models import RelayCollectMode, RelayItemType, RelayPackageRow, RelayRecentRange, RelayRouteRow
@@ -138,6 +139,37 @@ class RelayWorkbenchPageTestCase(unittest.TestCase):
         self.assertTrue(focused)
         self.assertEqual(page.package_table.currentRow(), 1)
         self.assertIn("已定位到失败内容", page.result_text.toPlainText())
+
+    def test_request_send_blocks_when_route_validation_failed(self):
+        page = RelayWorkbenchPage()
+        page.append_package_rows([RelayPackageRow(sequence=1, item_type=RelayItemType.TEXT, content="第一条")])
+        page.append_route_rows([RelayRouteRow(downstream_session="客户群", validation_status="未找到")])
+        emitted = []
+        page.send_requested.connect(emitted.append)
+
+        with patch("pyweixin_gui.ui.widgets.QMessageBox.warning") as warning:
+            page._request_send()
+
+        self.assertEqual(len(emitted), 0)
+        warning.assert_called_once()
+        self.assertIn("已拦截正式发送", page.result_text.toPlainText())
+
+    def test_request_send_confirms_when_route_not_validated(self):
+        page = RelayWorkbenchPage()
+        page.append_package_rows([RelayPackageRow(sequence=1, item_type=RelayItemType.TEXT, content="第一条")])
+        page.append_route_rows([RelayRouteRow(downstream_session="客户群", validation_status="未验证")])
+        emitted = []
+        page.send_requested.connect(emitted.append)
+
+        with patch("pyweixin_gui.ui.widgets.QMessageBox.question", return_value=QMessageBox.StandardButton.No) as question:
+            page._request_send()
+        self.assertEqual(len(emitted), 0)
+        question.assert_called_once()
+        self.assertIn("已取消正式发送", page.result_text.toPlainText())
+
+        with patch("pyweixin_gui.ui.widgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+            page._request_send()
+        self.assertEqual(len(emitted), 1)
 
     @staticmethod
     def _row_remove_button(table, columns) -> QPushButton | None:

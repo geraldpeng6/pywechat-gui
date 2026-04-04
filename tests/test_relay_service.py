@@ -232,12 +232,19 @@ class RelayServiceTestCase(unittest.TestCase):
         files_dir = export_root / "files"
         files_dir.mkdir(parents=True, exist_ok=True)
         (files_dir / "报价单.pdf").write_text("demo", encoding="utf-8")
+        media_dir = export_root / "聊天图片与视频"
+        media_dir.mkdir(parents=True, exist_ok=True)
+        (media_dir / "截图.png").write_text("png", encoding="utf-8")
+        (media_dir / "演示视频.mp4").write_text("mp4", encoding="utf-8")
         result = self.service.load_export_folder_rows(export_root)
         self.assertEqual(result.source_session, "上游A")
-        self.assertEqual(len(result.rows), 3)
+        self.assertEqual(len(result.rows), 5)
         self.assertEqual(result.rows[0].item_type, RelayItemType.TEXT)
         self.assertEqual(result.rows[0].content, "文本2")
         self.assertEqual(result.rows[1].content, "文本1")
+        self.assertEqual(result.rows[2].item_type, RelayItemType.FILE)
+        self.assertEqual(result.rows[3].item_type, RelayItemType.IMAGE)
+        self.assertEqual(result.rows[4].item_type, RelayItemType.FILE)
 
     @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl not installed")
     def test_export_package_folder_and_reload(self):

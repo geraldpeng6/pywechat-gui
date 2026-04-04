@@ -2254,6 +2254,18 @@ class RelayWorkbenchPage(QWidget):
             test_only=test_only,
         )
 
+    def _route_validation_snapshot(self) -> dict[str, int]:
+        rows = [row for row in self.route_rows() if row.enabled]
+        found_count = sum(1 for row in rows if row.validation_status == "已找到")
+        missing_count = sum(1 for row in rows if row.validation_status == "未找到")
+        pending_count = len(rows) - found_count - missing_count
+        return {
+            "total": len(rows),
+            "found": found_count,
+            "missing": missing_count,
+            "pending": pending_count,
+        }
+
     def _request_validate_routes(self) -> None:
         request = self.current_validation_request()
         errors = request.validate()
@@ -2276,6 +2288,25 @@ class RelayWorkbenchPage(QWidget):
         if errors:
             QMessageBox.warning(self, "开始批量发送", next(iter(errors.values())))
             return
+        snapshot = self._route_validation_snapshot()
+        if snapshot["missing"] > 0:
+            message = (
+                f"当前有 {snapshot['missing']} 个收件人验证失败，建议先修复或重新验证后再发送。\n\n"
+                f"已验证可用 {snapshot['found']} 个，未验证 {snapshot['pending']} 个，未找到 {snapshot['missing']} 个。"
+            )
+            QMessageBox.warning(self, "开始批量发送", message)
+            self.result_text.setPlainText("已拦截正式发送，请先处理验证失败的收件人。")
+            return
+        if snapshot["pending"] > 0:
+            message = (
+                f"当前仍有 {snapshot['pending']} 个收件人未验证。\n\n"
+                f"已验证可用 {snapshot['found']} 个，待验证 {snapshot['pending']} 个。\n"
+                "建议先点“验证收件人”。是否仍然继续发送？"
+            )
+            answer = QMessageBox.question(self, "开始批量发送", message)
+            if answer != QMessageBox.StandardButton.Yes:
+                self.result_text.setPlainText("已取消正式发送，请先验证收件人后再试。")
+                return
         self.send_requested.emit(request)
 
     def import_route_rows(self) -> None:

@@ -36,6 +36,7 @@ ProgressCallback = Callable[[str], None]
 StopCallback = Callable[[], bool]
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff"}
+EXPORT_MEDIA_FOLDER_NAMES = ("聊天图片与视频", "media")
 MEDIA_PLACEHOLDER_LABELS = {
     "图片": "图片",
     "[图片]": "图片",
@@ -472,7 +473,22 @@ class RelayService:
                         collected_at=datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
                     )
                 )
-        warning = "" if rows else "文件夹里没有识别到可转发的文本或文件。"
+        media_folder = next((folder / name for name in EXPORT_MEDIA_FOLDER_NAMES if (folder / name).exists()), None)
+        if media_folder is not None:
+            media_items = sorted([path for path in media_folder.iterdir() if path.is_file()], key=lambda item: item.stat().st_mtime)
+            for path in media_items:
+                item_type = RelayItemType.IMAGE if path.suffix.lower() in IMAGE_SUFFIXES else RelayItemType.FILE
+                rows.append(
+                    RelayPackageRow(
+                        sequence=len(rows) + 1,
+                        item_type=item_type,
+                        source_session=source_session,
+                        content=path.name,
+                        file_path=str(path),
+                        collected_at=datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                )
+        warning = "" if rows else "文件夹里没有识别到可转发的文本、文件或图片/视频。"
         return RelayCollectionResult(source_session=source_session, rows=rows, warning=warning)
 
     def _load_relay_package_rows(self, folder: Path, manifest_path: Path) -> RelayCollectionResult:
