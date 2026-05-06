@@ -102,6 +102,86 @@ pyautogui.FAILSAFE=False#防止鼠标在屏幕边缘处造成的误触
 Regex_Patterns=Regex_Patterns()#所有的正则pattern
 
 
+def _active_chat_input(main_window:WindowSpecification, error_message:str)->WindowSpecification:
+    edit_area=main_window.child_window(**Edits.CurrentChatEdit)
+    if not edit_area.exists(timeout=0.5) or not edit_area.is_visible():
+        raise NotFriendError(error_message)
+    try:
+        edit_area.set_focus()
+    except Exception:
+        pass
+    edit_area.click_input()
+    return edit_area
+
+
+def _chat_input_text(edit_area:WindowSpecification)->str:
+    values=[]
+    for getter in (
+        lambda: edit_area.window_text(),
+        lambda: edit_area.element_info.name,
+        lambda: edit_area.legacy_properties().get('Value', ''),
+    ):
+        try:
+            value=getter()
+        except Exception:
+            continue
+        if value:
+            values.append(str(value))
+    return max(values, key=len) if values else ''
+
+
+def _clear_chat_input(main_window:WindowSpecification, error_message:str)->WindowSpecification:
+    edit_area=_active_chat_input(main_window,error_message)
+    for _ in range(3):
+        try:
+            edit_area.set_text('')
+        except Exception:
+            pyautogui.hotkey('ctrl','a',_pause=False)
+            pyautogui.press('backspace',_pause=False)
+        time.sleep(0.08)
+        edit_area=_active_chat_input(main_window,error_message)
+        current_text=_chat_input_text(edit_area)
+        if not current_text:
+            return edit_area
+        pyautogui.hotkey('ctrl','a',_pause=False)
+        pyautogui.press('backspace',_pause=False)
+        time.sleep(0.08)
+    return edit_area
+
+
+def _paste_text_to_chat_input(main_window:WindowSpecification,message:str,error_message:str)->WindowSpecification:
+    for attempt in range(3):
+        edit_area=_active_chat_input(main_window,error_message)
+        SystemSettings.copy_text_to_clipboard(message)#不要直接set_text,直接set_text相当于默认clear了
+        pyautogui.hotkey('ctrl','v',_pause=False)
+        time.sleep(0.15)
+        edit_area=_active_chat_input(main_window,error_message)
+        current_text=_chat_input_text(edit_area)
+        if not current_text or message in current_text:
+            return edit_area
+        if attempt<2:
+            _clear_chat_input(main_window,error_message)
+    raise RuntimeError('发送前粘贴内容校验失败，请确认微信输入框焦点没有被其他窗口抢走。')
+
+
+def _send_current_chat_input(main_window:WindowSpecification,send_delay:float,error_message:str)->None:
+    _active_chat_input(main_window,error_message)
+    time.sleep(send_delay)
+    send_button=main_window.child_window(**Buttons.SendButton)
+    if send_button.exists(timeout=0.2) and send_button.is_visible():
+        send_button.click_input()
+    else:
+        pyautogui.hotkey('alt','s',_pause=False)
+    time.sleep(max(0.12, min(send_delay, 0.5)))
+    _active_chat_input(main_window,error_message)
+
+
+def _paste_clipboard_payload_and_send(main_window:WindowSpecification,send_delay:float,error_message:str)->None:
+    _active_chat_input(main_window,error_message)
+    pyautogui.hotkey('ctrl','v',_pause=False)
+    _send_current_chat_input(main_window,send_delay,error_message)
+
+
 class AutoReply():
     
     @staticmethod
@@ -1490,37 +1570,27 @@ class Files():
         def send_messages(messages):
             for message in messages:
                 if 0<len(message)<2000:
-                    SystemSettings.copy_text_to_clipboard(message)
-                    pyautogui.hotkey('ctrl','v',_pause=False)
-                    time.sleep(send_delay)
-                    pyautogui.hotkey('alt','s',_pause=False)
+                    _paste_text_to_chat_input(main_window,message,'非正常好友,无法发送文件!')
+                    _send_current_chat_input(main_window,send_delay,'非正常好友,无法发送文件!')
                 if len(message)>2000:
                     SystemSettings.convert_long_text_to_txt(message)
-                    pyautogui.hotkey('ctrl','v',_pause=False)
-                    time.sleep(send_delay)
-                    pyautogui.hotkey('alt','s',_pause=False)
-                    warn(message=f"微信消息字数上限为2000,超过2000字部分将被省略,该条长文本消息已为你转换为txt发送",category=LongTextWarning) 
+                    _paste_clipboard_payload_and_send(main_window,send_delay,'非正常好友,无法发送文件!')
+                    warn(message=f"微信消息字数上限为2000,超过2000字部分将被省略,该条长文本消息已为你转换为txt发送",category=LongTextWarning)
         #发送文件逻辑
         def send_files(files):
             if len(files)<=9:
                 SystemSettings.copy_files_to_clipboard(filepaths_list=files)
-                pyautogui.hotkey("ctrl","v")
-                time.sleep(send_delay)
-                pyautogui.hotkey('alt','s',_pause=False)
+                _paste_clipboard_payload_and_send(main_window,send_delay,'非正常好友,无法发送文件!')
             else:
                 files_num=len(files)
                 rem=len(files)%9
                 for i in range(0,files_num,9):
                     if i+9<files_num:
                         SystemSettings.copy_files_to_clipboard(filepaths_list=files[i:i+9])
-                        pyautogui.hotkey('ctrl','v')
-                        time.sleep(send_delay)
-                        pyautogui.hotkey('alt','s',_pause=False)
+                        _paste_clipboard_payload_and_send(main_window,send_delay,'非正常好友,无法发送文件!')
                 if rem:
                     SystemSettings.copy_files_to_clipboard(filepaths_list=files[files_num-rem:files_num])
-                    pyautogui.hotkey('ctrl','v')
-                    time.sleep(send_delay)
-                    pyautogui.hotkey('alt','s',_pause=False)
+                    _paste_clipboard_payload_and_send(main_window,send_delay,'非正常好友,无法发送文件!')
         if is_maximize is None:
             is_maximize=GlobalConfig.is_maximize
         if send_delay is None:
@@ -1540,8 +1610,7 @@ class Files():
         if not edit_area.exists(timeout=0.1):
             raise NotFriendError(f'非正常好友,无法发送文件!')
         if clear:
-            edit_area=main_window.child_window(**Edits.CurrentChatEdit)
-            edit_area.set_text('')
+            edit_area=_clear_chat_input(main_window,'非正常好友,无法发送文件!')
         if with_messages and messages_first:
             send_messages(messages)
             send_files(files)
@@ -2656,23 +2725,18 @@ class Messages():
         if not edit_area.exists(timeout=0.1):
             raise NotFriendError(f'非正常好友,无法发送消息')
         if clear:
-            edit_area.set_text('')
+            edit_area=_clear_chat_input(main_window,'非正常好友,无法发送消息')
         if at_all:
             At_all(main_window)
         if at_members:
             At(main_window,at_members)
         for message in messages:
             if 0<len(message)<2000:
-                edit_area.click_input()
-                SystemSettings.copy_text_to_clipboard(message)#不要直接set_text,直接set_text相当于默认clear了
-                pyautogui.hotkey('ctrl','v',_pause=False)
-                time.sleep(send_delay)
-                pyautogui.hotkey('alt','s',_pause=False)
+                _paste_text_to_chat_input(main_window,message,'非正常好友,无法发送消息')
+                _send_current_chat_input(main_window,send_delay,'非正常好友,无法发送消息')
             elif len(message)>2000:#字数超过200字发送txt文件
                 SystemSettings.convert_long_text_to_txt(message)
-                pyautogui.hotkey('ctrl','v',_pause=False)
-                time.sleep(send_delay)
-                pyautogui.hotkey('alt','s',_pause=False)
+                _paste_clipboard_payload_and_send(main_window,send_delay,'非正常好友,无法发送消息')
                 warn(message=f"微信消息字数上限为2000,超过2000字部分将被省略,该条长文本消息已为你转换为txt发送",category=LongTextWarning)
         if close_weixin:
             main_window.close()

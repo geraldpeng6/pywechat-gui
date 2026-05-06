@@ -942,13 +942,13 @@ class MainWindow(QMainWindow):
             7000,
         )
         if saved.failure_count:
-            QMessageBox.warning(
-                self,
+            self._notify_user(
                 "任务已完成",
                 f"任务执行完成，但有 {saved.failure_count} 行失败。可前往执行历史查看详情并重试失败项。",
+                warning=True,
             )
         else:
-            QMessageBox.information(self, "任务完成", f"任务执行完成，共成功处理 {saved.success_count} 行。")
+            self._notify_user("任务完成", f"任务执行完成，共成功处理 {saved.success_count} 行。")
 
     def _handle_export_progress(self, message: str) -> None:
         self.export_page.summary_label.setText(message)
@@ -1165,6 +1165,14 @@ class MainWindow(QMainWindow):
             self._persist_execution_record(self._build_relay_send_execution(result, relay_request))
             self.refresh_history()
             self.status_bar.showMessage("测试发送完成。" if result.test_only else "批量发送完成。", 5000)
+            title = "测试发送完成" if result.test_only else "批量发送完成"
+            message = (
+                f"{title}。\n\n"
+                f"成功目标：{result.success_count}\n"
+                f"失败目标：{result.failure_count}\n"
+                f"发送内容数：{result.item_count}"
+            )
+            self._notify_user(title, message, warning=result.failure_count > 0)
             return
 
     def _handle_worker_failure(self, ui_error: UiError) -> None:
@@ -1178,6 +1186,7 @@ class MainWindow(QMainWindow):
         elif isinstance(self.worker, RelayWorker):
             self.relay_page.set_runtime_status("任务执行失败，请查看错误详情。")
             self.relay_page.result_text.setPlainText("任务执行失败，请查看错误详情。")
+        QApplication.beep()
         self._show_error_dialog(ui_error, "任务执行失败")
 
     def _cleanup_worker(self) -> None:
@@ -1677,6 +1686,13 @@ class MainWindow(QMainWindow):
         button_box.accepted.connect(dialog.accept)
         layout.addWidget(button_box)
         dialog.exec()
+
+    def _notify_user(self, title: str, message: str, warning: bool = False) -> None:
+        QApplication.beep()
+        if warning:
+            QMessageBox.warning(self, title, message)
+        else:
+            QMessageBox.information(self, title, message)
 
     def export_selected_execution_failures(self) -> None:
         execution_id = self._selected_execution_id()

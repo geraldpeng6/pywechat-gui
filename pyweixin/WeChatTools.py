@@ -442,21 +442,49 @@ class Tools():
             friend:搜索的内容,好友或群聊的备注,公众号服务号名称等
             search_result:微信主界面搜索内容后的结果列表,即Uielements内的Lists.SearchResult
         '''
-        searh_content_label={'最近使用','联系人','群聊','服务号','公众号','最常使用'}
-        xtable_label={'功能','最近使用','最常使用'}
-        texts=[listitem.window_text() for listitem in search_result.children(control_type="ListItem")]
+        def exact_title(listitem):
+            candidates=[]
+            try:
+                candidates.append(listitem.window_text())
+            except Exception:
+                pass
+            try:
+                candidates.append(listitem.element_info.name)
+            except Exception:
+                pass
+            try:
+                for child in listitem.descendants():
+                    if child.friendly_class_name() in {'Text','Button'}:
+                        candidates.append(child.window_text())
+            except Exception:
+                pass
+            return any(str(text or '').strip()==friend for text in candidates)
+
+        def is_network_result(listitem):
+            try:
+                text=listitem.window_text()
+            except Exception:
+                text=''
+            try:
+                names=' '.join(child.window_text() for child in listitem.descendants())
+            except Exception:
+                names=''
+            combined=f'{text} {names}'
+            network_markers=('搜索网络结果','网络查找','搜一搜','网页','微信指数','公众号文章')
+            return any(marker in combined for marker in network_markers)
+
         listitems=search_result.children(control_type='ListItem')
-        #正常好友群聊服务号公众号的class_name是mmui::SearchContentCellView
-        if searh_content_label.intersection(texts):#交集
-            listitems=[listitem for listitem in listitems if listitem.class_name()=="mmui::SearchContentCellView"]
-            listitems=[listitem for listitem in listitems if listitem.window_text()==friend]
-            if listitems:
-                return listitems[0]
-        if xtable_label.intersection(texts):#功能比如文件传输助手,微信支付的class_name是mmui::XTableCell
-            listitems=search_result.children(control_type='ListItem',class_name="mmui::XTableCell")
-            listitems=[listitem for listitem in listitems if listitem.window_text()==friend]
-            if listitems:
-                return listitems[0]
+        local_classes=("mmui::XTableCell","mmui::SearchContentCellView")
+        local_matches=[
+            listitem for listitem in listitems
+            if listitem.class_name() in local_classes and exact_title(listitem) and not is_network_result(listitem)
+        ]
+        if local_matches:
+            # “文件传输助手”等功能入口是 XTableCell；搜索页出现网络结果时仍应优先选择本地入口。
+            feature_matches=[item for item in local_matches if item.class_name()=="mmui::XTableCell"]
+            if feature_matches:
+                return feature_matches[0]
+            return local_matches[0]
         return None
     
     @staticmethod
@@ -1011,12 +1039,18 @@ class Navigator():
             search_results=main_window.child_window(**Lists.SearchResult)#搜索结果列表
             search_result=Tools.get_search_result(friend=friend,search_result=search_results)
             search_mobile=search_results.children(**ListItems.MobileSearchListItem)#绿色的网络查找手机/QQ号选项
-            if search_result and not search_mobile:#有搜索结果没有网络查找qq号手机号选项
+            if search_result:#有本地精确匹配结果时，不受网络结果项影响，直接打开本地会话
                 search_result.click_input()
-                edit_area=main_window.child_window(**Edits.CurrentChatEdit)
-                if edit_area.exists(timeout=0.2) and edit_area.is_visible():
-                    edit_area.click_input()
-                return main_window
+                if not current_chat.exists(timeout=1.0):
+                    search_result.double_click_input()
+                if current_chat.exists(timeout=1.0):
+                    edit_area=main_window.child_window(**Edits.CurrentChatEdit)
+                    if edit_area.exists(timeout=0.2) and edit_area.is_visible():
+                        edit_area.click_input()
+                        return main_window
+                chat_button.click_input()
+                main_window.close()
+                raise NoSuchFriendError
             if not search_result and search_mobile:#没有搜索结果，有网络查找qq号手机号选项
                 search_mobile[0].click_input()
                 add_friend_window=desktop.window(**Windows.AddfriendWindow)
