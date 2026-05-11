@@ -442,48 +442,61 @@ class Tools():
             friend:搜索的内容,好友或群聊的备注,公众号服务号名称等
             search_result:微信主界面搜索内容后的结果列表,即Uielements内的Lists.SearchResult
         '''
-        def exact_title(listitem):
-            candidates=[]
+        def item_texts(listitem):
+            texts=[]
             try:
-                candidates.append(listitem.window_text())
+                texts.append(listitem.window_text())
             except Exception:
                 pass
             try:
-                candidates.append(listitem.element_info.name)
+                texts.append(listitem.element_info.name)
             except Exception:
                 pass
             try:
                 for child in listitem.descendants():
-                    if child.friendly_class_name() in {'Text','Button'}:
-                        candidates.append(child.window_text())
+                    try:
+                        texts.append(child.window_text())
+                    except Exception:
+                        pass
+                    try:
+                        texts.append(child.element_info.name)
+                    except Exception:
+                        pass
             except Exception:
                 pass
-            return any(str(text or '').strip()==friend for text in candidates)
+            return [str(text or '').strip() for text in texts if str(text or '').strip()]
+
+        def exact_title(listitem):
+            return any(text==friend for text in item_texts(listitem))
 
         def is_network_result(listitem):
-            try:
-                text=listitem.window_text()
-            except Exception:
-                text=''
-            try:
-                names=' '.join(child.window_text() for child in listitem.descendants())
-            except Exception:
-                names=''
-            combined=f'{text} {names}'
+            combined=' '.join(item_texts(listitem))
             network_markers=('搜索网络结果','网络查找','搜一搜','网页','微信指数','公众号文章')
             return any(marker in combined for marker in network_markers)
 
         listitems=search_result.children(control_type='ListItem')
-        local_classes=("mmui::XTableCell","mmui::SearchContentCellView")
-        local_matches=[
-            listitem for listitem in listitems
-            if listitem.class_name() in local_classes and exact_title(listitem) and not is_network_result(listitem)
-        ]
+        section_labels={'最近使用','联系人','群聊','最常使用','功能','聊天记录','服务号','公众号'}
+        contact_sections={'最近使用','联系人','群聊','最常使用','服务号','公众号'}
+        feature_matches=[]
+        local_matches=[]
+        current_section=''
+        for listitem in listitems:
+            texts=item_texts(listitem)
+            combined=' '.join(texts)
+            if any(text in section_labels for text in texts) and friend not in combined:
+                current_section=next(text for text in texts if text in section_labels)
+                continue
+            if is_network_result(listitem):
+                continue
+            class_name=listitem.class_name()
+            if class_name=="mmui::XTableCell" and friend in combined and current_section in {'功能',''}:
+                feature_matches.append(listitem)
+                continue
+            if class_name=="mmui::SearchContentCellView" and current_section in contact_sections and exact_title(listitem):
+                local_matches.append(listitem)
+        if feature_matches:
+            return feature_matches[0]
         if local_matches:
-            # “文件传输助手”等功能入口是 XTableCell；搜索页出现网络结果时仍应优先选择本地入口。
-            feature_matches=[item for item in local_matches if item.class_name()=="mmui::XTableCell"]
-            if feature_matches:
-                return feature_matches[0]
             return local_matches[0]
         return None
     
@@ -1046,6 +1059,11 @@ class Navigator():
                 if current_chat.exists(timeout=1.0):
                     edit_area=main_window.child_window(**Edits.CurrentChatEdit)
                     if edit_area.exists(timeout=0.2) and edit_area.is_visible():
+                        edit_area.click_input()
+                        return main_window
+                if friend in {'文件传输助手','File Transfer'}:
+                    edit_area=main_window.child_window(**Edits.CurrentChatEdit)
+                    if edit_area.exists(timeout=0.5) and edit_area.is_visible():
                         edit_area.click_input()
                         return main_window
                 chat_button.click_input()
