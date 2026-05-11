@@ -150,28 +150,21 @@ def _clear_chat_input(main_window:WindowSpecification, error_message:str)->Windo
 
 
 def _paste_text_to_chat_input(main_window:WindowSpecification,message:str,error_message:str)->WindowSpecification:
-    for attempt in range(3):
-        edit_area=_active_chat_input(main_window,error_message)
-        SystemSettings.copy_text_to_clipboard(message)#不要直接set_text,直接set_text相当于默认clear了
-        pyautogui.hotkey('ctrl','v',_pause=False)
-        time.sleep(0.15)
-        edit_area=_active_chat_input(main_window,error_message)
-        current_text=_chat_input_text(edit_area)
-        if not current_text or message in current_text:
-            return edit_area
-        if attempt<2:
-            _clear_chat_input(main_window,error_message)
-    raise RuntimeError('发送前粘贴内容校验失败，请确认微信输入框焦点没有被其他窗口抢走。')
+    edit_area=_active_chat_input(main_window,error_message)
+    SystemSettings.copy_text_to_clipboard(message)#不要直接set_text,直接set_text相当于默认clear了
+    pyautogui.hotkey('ctrl','v',_pause=False)
+    time.sleep(0.15)
+    return _active_chat_input(main_window,error_message)
 
 
 def _send_current_chat_input(main_window:WindowSpecification,send_delay:float,error_message:str)->None:
     _active_chat_input(main_window,error_message)
     time.sleep(send_delay)
+    pyautogui.hotkey('alt','s',_pause=False)
+    time.sleep(max(0.12, min(send_delay, 0.5)))
     send_button=main_window.child_window(**Buttons.SendButton)
-    if send_button.exists(timeout=0.2) and send_button.is_visible():
+    if send_button.exists(timeout=0.2) and send_button.is_visible() and send_button.is_enabled():
         send_button.click_input()
-    else:
-        pyautogui.hotkey('alt','s',_pause=False)
     time.sleep(max(0.12, min(send_delay, 0.5)))
     _active_chat_input(main_window,error_message)
 
